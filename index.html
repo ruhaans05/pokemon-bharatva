@@ -842,6 +842,8 @@ M_("nariyalpur","Nariyalpur Village","kerala","town",[
 "TpWWWW..........WWWppT",
 "TTTTTTTTTTTTTTTTTTTTTT"],
 {exits:[{x:10,y:0,w:2,h:1,to:"route1",tx:6,ty:38}],
+ blocks:[{x:10,y:1,w:2,h:1,gx:10,gy:1,flagNot:"starter",who:"Lab Assistant",
+   text:["Whoa there! Route 1 is full of wild Pokémon — you can't go out with empty hands!","Prof. Neem is waiting in the lab (the building with the dark door). Get your partner first!"]}],
  doorD:{kind:"lab"},
  signs:{"9,9":"NARIYALPUR VILLAGE — Where the palms hum and the backwaters sleep."},
  npcs:[
@@ -939,7 +941,7 @@ M_("route2","Route 2 — Ghat Road","ghats","route",[
 {exits:[{x:0,y:3,w:1,h:3,to:"malabar",tx:16,ty:1},{x:35,y:4,w:1,h:3,to:"ghatwoods",tx:1,ty:8}],
  signs:{"8,4":"ROUTE 2 — GHAT ROAD. Hairpin bends ahead. Honk... er, call out."},
  wild:{rate:0.14,pool:[[9,5,8,20],[13,5,7,15],[14,12,13,5],[18,5,8,20],[30,5,8,20],[11,5,8,15],[62,7,9,5]]},
- blocks:[{x:2,y:4,flagNot:"badge0",who:"Ranger",text:["The Ghat Road is closed until you've proven yourself.","Come back with the Spice Badge from Meera's gym."]}],
+ blocks:[{x:2,y:1,w:1,h:10,gx:2,gy:4,flagNot:"badge0",who:"Ranger",text:["The Ghat Road is closed until you've proven yourself.","Come back with the Spice Badge from Meera's gym."]}],
  trainers:[
   {x:12,y:6,d:3,los:4,name:"Hiker Gopal",team:[[39,7],[9,7]],money:280,pre:["These hills gave me legs of iron and a Pattharo of stone!"],post:["Rest at the top. The view is worth every step."]},
   {x:26,y:5,d:2,los:4,name:"Picker Leela",team:[[30,8]],money:240,pre:["My Chaipat picks only the tenderest leaves."],post:["Have a cup of chai before the woods!"]},
@@ -1009,7 +1011,8 @@ M_("route3","Route 3","beach","route",[
 {exits:[{x:0,y:4,w:1,h:3,to:"yantra",tx:22,ty:11},{x:35,y:4,w:1,h:3,to:"sonabeach",tx:20,ty:6}],
  signs:{"15,4":"ROUTE 3 — West: Sona Beach. Sunscreen recommended."},
  wild:{rate:0.13,pool:[[15,10,13,20],[11,10,13,20],[34,10,13,15],[9,10,13,15],[20,10,13,15],[36,12,14,5],[66,12,14,5]]},
- blocks:[{x:2,y:5,flagNot:"badge1",who:"Officer",text:["Road to the coast is under repair.","With Arjun's Circuit Badge I'd know you can handle yourself. Go earn it!"]}],
+ blocks:[{x:2,y:1,w:1,h:10,gx:2,gy:5,flagNot:"badge1",who:"Officer",text:["Road to the coast is under repair.","With Arjun's Circuit Badge I'd know you can handle yourself. Go earn it!"]},
+  {x:2,y:1,w:1,h:10,gx:2,gy:5,flagNot:"dhuan_lab",who:"Officer",text:["Hold on — there's a break-in at the Yantra data lab RIGHT NOW. Men in grey.","I can't leave my post. You look capable — check the lab in the city, will you?"]}],
  trainers:[
   {x:13,y:3,d:2,los:4,name:"Rickshawala Raju",team:[[34,11],[15,11]],money:380,pre:["Fastest rickshaw in the south! My Bijlu charges the battery!"],post:["Okay, okay, meter down. You win."]},
   {x:24,y:8,d:0,los:4,name:"Tourist Priya",team:[[27,12]],money:400,pre:["I came for the beaches, stayed for the Pokémon!"],post:["Time for another vacation photo."]},
@@ -1065,7 +1068,7 @@ M_("route4","Route 4 — Konkan Way","beach","route",[
 {exits:[{x:0,y:16,w:1,h:2,to:"sonabeach",tx:22,ty:7},{x:6,y:21,w:2,h:1,to:"mahanagar",tx:11,ty:1,flip:true}],
  signs:{"5,5":"ROUTE 4 — KONKAN WAY. The sea keeps you company all the way north."},
  wild:{rate:0.13,pool:[[24,14,17,20],[26,14,17,15],[27,14,17,15],[15,14,17,15],[49,15,17,10],[20,14,16,15],[28,14,17,10]]},
- blocks:[{x:2,y:17,flagNot:"dhuan_beach",who:"Fisherwoman",text:["The cove ahead is choked with plastic — some Team Dhuan lot dumped it.","Sort them out at the beach first, will you? Zoya's already furious."]}],
+ blocks:[{x:1,y:15,w:12,h:1,gx:5,gy:15,flagNot:"dhuan_beach",who:"Fisherwoman",text:["The cove ahead is choked with plastic — some Team Dhuan lot dumped it. Nets full of bags, not fish.","Sort out those grey goons loitering on Sona Beach first, will you? Zoya's already furious."]}],
  trainers:[
   {x:8,y:3,d:2,los:4,name:"Sailor Dominic",team:[[24,15],[26,16]],money:520,pre:["From Kochi to Mumbai I've sailed! Fight me, landlubber!"],post:["You'd survive a monsoon crossing, I reckon."]},
   {x:5,y:10,d:3,los:4,name:"Trader Meena",team:[[17,16],[15,16]],money:540,pre:["Cashews! Kokum! And a cow that fights!"],post:["Gomata forgives you. So do I."]},
@@ -1125,7 +1128,7 @@ M_("route5","Route 5 — Aravalli Path","desert","route",[
 {exits:[{x:6,y:0,w:2,h:1,to:"thardesert",tx:3,ty:16},{x:6,y:21,w:2,h:1,to:"mahanagar",tx:10,ty:1}],
  signs:{"5,8":"ROUTE 5 — The green thins. The Thar begins. Carry water."},
  wild:{rate:0.13,pool:[[41,18,21,20],[43,18,21,15],[44,18,21,20],[39,18,21,15],[16,19,21,10],[50,18,20,15],[46,18,20,5]]},
- blocks:[{x:2,y:19,flagNot:"badge3",who:"Camel Herder",text:["The desert eats the unprepared, beta.","Come back with Vikram's Akhada Badge — then I'll believe you're ready."]}],
+ blocks:[{x:1,y:18,w:12,h:1,gx:6,gy:18,flagNot:"badge3",who:"Camel Herder",text:["The desert eats the unprepared, beta.","Come back with Vikram's Akhada Badge — then I'll believe you're ready."]}],
  trainers:[
   {x:9,y:5,d:3,los:4,name:"Herder Devi",team:[[41,19],[41,20]],money:640,pre:["My camels race the sunset. You race me?"],post:["Fine legs! For a two-legs."]},
  ]});
@@ -1198,7 +1201,7 @@ M_("route6","Route 6 — Gangetic Plain","river","route",[
 {exits:[{x:0,y:5,w:1,h:2,to:"marudhara",tx:9,ty:14},{x:36,y:6,w:1,h:2,to:"gangacity",tx:1,ty:12}],
  signs:{"11,5":"ROUTE 6 — The river plain. Wheat on both sides, sky above, dust between."},
  wild:{rate:0.13,pool:[[17,26,29,10],[15,26,29,15],[22,26,29,20],[24,26,29,15],[34,26,28,15],[37,27,29,15],[54,29,31,3],[63,29,31,7]]},
- blocks:[{x:2,y:6,flagNot:"badge4",who:"Farmer",text:["Floods took the east bridge. Repairs going on.","Show me Rajveer's Dune Badge and I'll point you the safe ford."]}],
+ blocks:[{x:2,y:5,w:1,h:6,gx:2,gy:6,flagNot:"badge4",who:"Farmer",text:["Floods took the east bridge. Repairs going on.","Show me Rajveer's Dune Badge and I'll point you the safe ford."]}],
  trainers:[
   {x:14,y:7,d:3,los:4,name:"Farmer Balram",team:[[17,27],[22,28]],money:980,pre:["My Gomata ploughs, my Hathkin lifts. What does YOUR team do?"],post:["Strong hands, stronger Pokémon. Respect."]},
   {x:27,y:8,d:2,los:4,name:"Boatman Kishan",team:[[24,28],[25,29]],money:1000,pre:["The river gives and the river takes. Today it takes your pride!"],post:["The river gave you this one."]},
@@ -1247,7 +1250,8 @@ M_("route7","Route 7 — Teesta Trail","hills","route",[
 {exits:[{x:0,y:4,w:1,h:2,to:"gangacity",tx:20,ty:11},{x:33,y:5,w:1,h:2,to:"chaihills",tx:1,ty:11}],
  signs:{"3,6":"ROUTE 7 — TEESTA TRAIL. The air cools. The hills begin to sing."},
  wild:{rate:0.14,pool:[[30,32,35,20],[9,32,34,15],[11,32,34,10],[62,33,35,15],[58,34,36,10],[31,36,38,4],[10,33,35,10],[66,33,35,8]]},
- blocks:[{x:2,y:5,flagNot:"dhuan_ganga",who:"Ghat Keeper",text:["The trail east is shut — the river folk are marching on the sludge pipe.","Help Kashvi drive Team Dhuan off the ghats first!"]}],
+ blocks:[{x:2,y:1,w:1,h:10,gx:2,gy:5,flagNot:"dhuan_ganga",who:"Ghat Keeper",text:["The trail east is shut — the river folk are marching on the sludge pipe at the ghats.","Help Kashvi drive Team Dhuan off the ghats first! (Look for the dark door in Ganga City.)"]},
+  {x:2,y:1,w:1,h:10,gx:2,gy:5,flagNot:"badge5",who:"Ghat Keeper",text:["The hills east test the spirit. Kashvi's Diya Badge is the only lantern I trust up there.","Win it at the Ganga City gym, then the trail is yours."]}],
  trainers:[
   {x:11,y:7,d:3,los:4,name:"Guide Norbu",team:[[62,33],[58,34]],money:1200,pre:["I guide trekkers up, and challengers down!"],post:["The hills accept you. Go on up."]},
   {x:25,y:4,d:2,los:4,name:"Botanist Rhea",team:[[30,34],[31,36]],money:1250,pre:["Tea is a science. So is battle!"],post:["First flush! You're first-flush grade."]},
@@ -1301,7 +1305,8 @@ M_("route8","Route 8 — Himalayan Pass","hills","route",[
  doorD:{kind:"factory"},
  signs:{"5,10":"ROUTE 8 — DANGER: heavy smog beyond this point. Dhuan Works site office ahead."},
  wild:{rate:0.13,pool:[[58,36,39,20],[60,36,39,15],[61,36,39,15],[62,36,38,10],[39,36,38,10],[52,37,39,15]]},
- blocks:[{x:6,y:4,flagNot:"dhuan_factory",who:"Dhuan Guard",text:["Oi! Pass closed. Company property. The smog? That's 'industrial weather'.","Boss Raakh is starting the Great Furnace today. Scram, kid."]}],
+ blocks:[{x:1,y:4,w:12,h:1,gx:6,gy:4,flagNot:"dhuan_factory",who:"Dhuan Guard",text:["Oi! Pass closed. Company property. The smog? That's 'industrial weather'.","Boss Raakh is starting the Great Furnace today — in the site office right below here. Scram, kid."]},
+  {x:1,y:14,w:12,h:1,gx:6,gy:14,flagNot:"badge6",who:"Mountain Monk",text:["The pass beyond is cruel — thin air, thick smog.","Only trainers bearing Tenzin's Summit Badge may walk past me. The wind insists."]}],
  trainers:[
   {x:9,y:7,d:3,los:4,name:"Trekker Anmol",team:[[60,37],[58,37]],money:1400,pre:["Altitude training! You'll feel it in three steps!"],post:["*wheeze* Good... lungs..."]},
  ]});
@@ -1378,7 +1383,7 @@ M_("route9","Route 9 — Roof of the World","snow","snow",[
  doorD:{kind:"spire"},
  signs:{"4,5":"MEGHDOOT SPIRE — The cloud messenger's perch. Only the storm-hearted may climb."},
  wild:{rate:0.12,pool:[[58,40,43,20],[59,44,46,5],[60,40,43,20],[61,40,43,20],[39,40,42,10]]},
- blocks:[{x:6,y:1,flagNot:"badges8",who:"League Guard",text:["Victory Road lies beyond. Eight badges or eight excuses — show me one."]}],
+ blocks:[{x:6,y:1,w:2,h:1,gx:6,gy:1,flagNot:"badges8",who:"League Guard",text:["Victory Road lies beyond. Eight badges or eight excuses — show me one."]}],
  trainers:[
   {x:9,y:9,d:3,los:4,name:"Ace Trainer Zara",team:[[61,41],[59,44],[35,42]],money:2100,pre:["Everyone strong ends up on this road eventually. Hello, everyone strong."],post:["See you at the League. I'll be back."]},
  ]});
@@ -1642,7 +1647,8 @@ function isWalkable(m,x,y){
   const t=tileOf(m,x,y);
   if(!WALK.has(t)&&!DOORS.has(t)) return false;
   // blocks (story roadblocks act as NPCs standing there)
-  for(const b of m.blocks) if(b.x===x&&b.y===y&&blockActive(b)) return false;
+  for(const b of m.blocks){ const bw=b.w||1,bh=b.h||1;
+    if(x>=b.x&&x<b.x+bw&&y>=b.y&&y<b.y+bh&&blockActive(b)) return false; }
   for(const n of m.npcs) if(n.x===x&&n.y===y) return false;
   for(const tr of m.trainers) if(tr.x===x&&tr.y===y) return false;
   if(m.legendary&&!G.flags[m.legendary.flag]&&m.legendary.x===x&&m.legendary.y===y) return false;
@@ -1668,7 +1674,7 @@ function updateWorld(){
   }
   // trainer LoS check
   const m=curMap();
-  for(const tr of m.trainers){
+  if(canBattle()) for(const tr of m.trainers){
     const tid=G.map+":"+tr.x+","+tr.y;
     if(G.beaten[tid]) continue;
     const [dx,dy]=DIRV[tr.d];
@@ -1723,11 +1729,13 @@ function interact(){
   // legendary
   if(m.legendary&&!G.flags[m.legendary.flag]&&m.legendary.x===fx&&m.legendary.y===fy){
     const L=m.legendary;
+    if(!canBattle()){ say(["A tremendous presence watches you... but you have no Pokémon fit to face it."]); return; }
     say(L.text,()=>{ G.flags[L.flag]=true; startWildBattle(makeMon(L.id,L.lvl),true); });
     return;
   }
   // blocks
-  for(const b of m.blocks) if(b.x===fx&&b.y===fy&&blockActive(b)){ say(b.text.map(t=>b.who+": "+t)); return; }
+  for(const b of m.blocks){ const bw=b.w||1,bh=b.h||1;
+    if(fx>=b.x&&fx<b.x+bw&&fy>=b.y&&fy<b.y+bh&&blockActive(b)){ say(b.text.map(t=>b.who+": "+t)); return; } }
   // npcs
   for(const n of m.npcs) if(n.x===fx&&n.y===fy){ n.d=[1,0,3,2][G.dir]; say(n.text.map(t=>n.name+": "+t)); return; }
   // trainers (talk = battle if not beaten)
@@ -1735,6 +1743,7 @@ function interact(){
     const tid=G.map+":"+tr.x+","+tr.y;
     if(tr.x===fx&&tr.y===fy){
       if(G.beaten[tid]) say(tr.post.map(t=>tr.name+": "+t));
+      else if(!canBattle()) say([tr.name+": Come back when you have a Pokémon that can battle!"]);
       else startTrainerBattle(tr,tid);
       return;
     }
@@ -1914,7 +1923,9 @@ function pickAIMove(mon,target){
   }
   return best;
 }
+function canBattle(){ return G.party.length>0&&G.party.some(m=>m.hp>0); }
 function startWildBattle(foe,isLegend){
+  if(!canBattle()) return;
   G.dexSeen.add(foe.id);
   BTL={kind:"wild",foe,foeParty:[foe],foeIdx:0,myIdx:firstAlive(),
     trainer:null,legend:!!isLegend,ui:{mode:"script"},anim:0,shakeFoe:0,shakeMe:0,ballAnim:null,
@@ -1922,6 +1933,7 @@ function startWildBattle(foe,isLegend){
   beginBattle();
 }
 function startTrainerBattle(tr,tid,doneCb,music){
+  if(!canBattle()){ say(["You have no Pokémon that can fight!"]); return; }
   const foeParty=tr.team.map(([id,lvl])=>makeMon(id,lvl));
   foeParty.forEach(f=>G.dexSeen.add(f.id));
   BTL={kind:"trainer",tr,tid,foeParty,foeIdx:0,foe:foeParty[0],myIdx:firstAlive(),
@@ -2380,6 +2392,7 @@ function enterGym(){
   const gi=curMap().gym;
   if(gi===undefined){ say(["It's locked."]); return; }
   const g=GYMS[gi];
+  if(!canBattle()){ say(["Gym Guide: Rule one — you need at least one healthy Pokémon to challenge a gym!"]); return; }
   if(G.badges[gi]){ say([g.leader+": The "+g.badge+" suits you. Go make it proud."]); return; }
   ask(g.leader+"'s Gym — "+g.type+" type. Challenge the leader?",["Bring it on!","Not yet"],ci=>{
     if(ci!==0) return;
@@ -2638,7 +2651,7 @@ function drawWorld(){
     drawTile(tileOf(m,tx,ty),tx*TS-cx,ty*TS-cy,p,tx,ty);
   }
   // blocks (guards)
-  for(const b of m.blocks) if(blockActive(b)) drawChar(b.x*TS-cx,b.y*TS-cy,0,false,{skin:"#e0a878",shirt:"#c87828",pant:"#4a4458",hat:"#8a5a28"});
+  for(const b of m.blocks) if(blockActive(b)) drawChar((b.gx??b.x)*TS-cx,(b.gy??b.y)*TS-cy,0,false,{skin:"#e0a878",shirt:"#c87828",pant:"#4a4458",hat:"#8a5a28"});
   // npcs
   for(const n of m.npcs) drawChar(n.x*TS-cx,n.y*TS-cy,n.d||0,false,npcPal(n.name));
   // trainers
