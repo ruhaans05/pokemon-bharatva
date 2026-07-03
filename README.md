@@ -17,6 +17,12 @@ Journey south to north, following India's geography: from the coconut backwaters
 - Procedurally drawn sprites, WebAudio soundtrack built on Hindustani ragas (Bhairav, Kafi, Malkauns…) with tanpura drone and tabla
 - Save/load via localStorage, PC box, Pokédex, badges
 
+## Saving & Explorer Mode
+
+- **Autosave**: your adventure saves itself automatically (on map changes, after battles, and every few steps). Close the tab any time — reopen and hit **CONTINUE** to resume exactly where you stood. Saves live in your browser's localStorage, so use the same browser/origin.
+- **Explorer Mode** (title screen or in-game menu): a separate free-roam save that opens the entire region — every gate, pass and guard stands aside, no battles, no wild encounters. Pure sightseeing, and it never touches your real adventure. Your explorer position is remembered separately.
+- Tip: for a stable localhost origin, run `python3 -m http.server` in this folder and open `http://localhost:8000`.
+
 ## Controls
 
 | Key | Action |

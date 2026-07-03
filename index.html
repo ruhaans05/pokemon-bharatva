@@ -1538,7 +1538,7 @@ const G={
   badges:[false,false,false,false,false,false,false,false],
   flags:{}, beaten:{},           // trainer ids beaten
   lastHeal:{map:"nariyalpur",x:8,y:8},
-  steps:0, repel:0, name:"AVANI", rivalName:"KIRAN",
+  steps:0, repel:0, name:"AVANI", rivalName:"KIRAN", explorer:false,
   starterId:null, dexSeen:new Set(), dexCaught:new Set(),
 };
 const DIRV=[[0,1],[0,-1],[-1,0],[1,0]];
@@ -1586,6 +1586,25 @@ function loadGame(){
   }catch(e){ return false; }
 }
 function hasSave(){ try{ return !!localStorage.getItem("bharatva-save"); }catch(e){ return false; } }
+function autosave(){ if(!G.explorer&&G.flags&&G.flags.starter) saveGame(); }
+function saveExplorer(){ try{ localStorage.setItem("bharatva-explorer",JSON.stringify({map:G.map,px:G.px,py:G.py})); }catch(e){} }
+function enterExplorer(){
+  autosave();
+  G.explorer=true; G.party=[]; G.scene="world";
+  let pos={map:"nariyalpur",px:10,py:6};
+  try{ const d=JSON.parse(localStorage.getItem("bharatva-explorer")||"null"); if(d&&MAPS[d.map]) pos=d; }catch(e){}
+  G.map=pos.map; G.px=pos.px; G.py=pos.py;
+  MUSIC.play(curMap().music||"town");
+  say(["EXPLORER MODE — you are a wandering traveller, not a trainer.",
+       "Every road, gate and pass is open. No wild Pokémon will bother you, and nobody will battle you.",
+       "Walk the whole of Bharatva! Your real adventure is safely auto-saved — leave any time from the menu."]);
+}
+function leaveExplorer(){
+  saveExplorer();
+  G.explorer=false;
+  if(loadGame()){ G.scene="world"; MUSIC.play(curMap().music||"town"); say(["Welcome back, trainer. Your adventure resumes right where you left it."]); }
+  else{ G.scene="title"; titleSel=0; MUSIC.stop(); }
+}
 //////////////////// DIALOG SYSTEM ////////////////////
 const DLG={pages:[],idx:0,chars:0,cb:null,choice:null,choiceIdx:0,active:false};
 function say(pages,cb){
@@ -1639,6 +1658,7 @@ function updateFade(){
 function warp(mapId,x,y){
   fadeTo(()=>{ G.map=mapId; G.px=x; G.py=y; G.moving=0;
     const m=MAPS[mapId]; MUSIC.play(m.music||"town");
+    if(G.explorer) saveExplorer(); else autosave();
   });
 }
 //////////////////// OVERWORLD ////////////////////
@@ -1655,6 +1675,7 @@ function isWalkable(m,x,y){
   return true;
 }
 function blockActive(b){
+  if(G.explorer) return false;
   if(b.flagNot==="badges8") return !G.badges.every(x=>x);
   if(b.flagNot&&b.flagNot.startsWith("badge")&&b.flagNot.length===6) return !G.badges[+b.flagNot[5]];
   if(b.flagNot) return !G.flags[b.flagNot];
@@ -1674,7 +1695,7 @@ function updateWorld(){
   }
   // trainer LoS check
   const m=curMap();
-  if(canBattle()) for(const tr of m.trainers){
+  if(!G.explorer&&canBattle()) for(const tr of m.trainers){
     const tid=G.map+":"+tr.x+","+tr.y;
     if(G.beaten[tid]) continue;
     const [dx,dy]=DIRV[tr.d];
@@ -1706,11 +1727,13 @@ function onStep(){
   // exits
   for(const ex of m.exits){
     if(G.px>=ex.x&&G.px<ex.x+(ex.w||1)&&G.py>=ex.y&&G.py<ex.y+(ex.h||1)){
-      if(ex.cond&&!condMet(ex.cond)){ say(["The way is blocked for now."]); G.px-=G.mx; G.py-=G.my; return; }
+      if(ex.cond&&!G.explorer&&!condMet(ex.cond)){ say(["The way is blocked for now."]); G.px-=G.mx; G.py-=G.my; return; }
       warp(ex.to,ex.tx,ex.ty); return;
     }
   }
   // wild encounter
+  if(G.explorer){ if(G.steps%24===0) saveExplorer(); return; }
+  if(G.steps%40===0) autosave();
   const t=tileOf(m,G.px,G.py);
   if(t==="G"&&m.wild&&Math.random()<m.wild.rate&&partyAlive()){
     const pool=m.wild.pool, total=pool.reduce((s,p)=>s+p[3],0);
@@ -1729,6 +1752,7 @@ function interact(){
   // legendary
   if(m.legendary&&!G.flags[m.legendary.flag]&&m.legendary.x===fx&&m.legendary.y===fy){
     const L=m.legendary;
+    if(G.explorer){ say(["A tremendous presence regards you calmly... and lets the traveller pass."]); return; }
     if(!canBattle()){ say(["A tremendous presence watches you... but you have no Pokémon fit to face it."]); return; }
     say(L.text,()=>{ G.flags[L.flag]=true; startWildBattle(makeMon(L.id,L.lvl),true); });
     return;
@@ -1742,7 +1766,8 @@ function interact(){
   for(const tr of m.trainers){
     const tid=G.map+":"+tr.x+","+tr.y;
     if(tr.x===fx&&tr.y===fy){
-      if(G.beaten[tid]) say(tr.post.map(t=>tr.name+": "+t));
+      if(G.explorer) say([tr.name+": Just passing through? The view's good from here. Safe travels!"]);
+      else if(G.beaten[tid]) say(tr.post.map(t=>tr.name+": "+t));
       else if(!canBattle()) say([tr.name+": Come back when you have a Pokémon that can battle!"]);
       else startTrainerBattle(tr,tid);
       return;
@@ -1757,6 +1782,13 @@ function interact(){
 //////////////////// DOORS: center/mart/gym/story ////////////////////
 function enterDoor(t,x,y){
   sfx.door();
+  if(G.explorer){
+    if(t==="D") return storyDoor();
+    say([t==="C"?"Nurse Asha: Just sightseeing? Rest your feet, traveller — the chai is free.":
+        t==="m"?"Shopkeeper: No trainer gear for wanderers, but do enjoy the town!":
+        "Gym Guide: Gyms are for trainers — but the architecture IS worth admiring."]);
+    return;
+  }
   if(t==="C"){ // Pokémon Center
     G.lastHeal={map:G.map,x:G.px,y:G.py};
     ask("Nurse Asha: Namaste! Shall I restore your Pokémon to full health?",["Yes please","Also the PC box","Not now"],ci=>{
@@ -1794,7 +1826,14 @@ function updateMenu(){
   const t=menuTop(); if(!t){ closeAllMenus(); return; }
   const move=(n,len)=>{ t.idx=(t.idx+n+len)%len; sfx.sel(); };
   if(t.kind==="main"){
-    const items=["POKÉMON","BAG","POKÉDEX","BADGES","SAVE","EXIT"];
+    if(G.explorer){
+      const items=["BACK TO ADVENTURE","KEEP EXPLORING"];
+      if(tapped("arrowdown"))move(1,items.length); if(tapped("arrowup"))move(-1,items.length);
+      if(tapB()||tapMenu()){ closeAllMenus(); return; }
+      if(tapA()){ sfx.ok(); closeAllMenus(); if(t.idx===0) leaveExplorer(); }
+      return;
+    }
+    const items=["POKÉMON","BAG","POKÉDEX","BADGES","SAVE","EXPLORER MODE","EXIT"];
     if(tapped("arrowdown"))move(1,items.length); if(tapped("arrowup"))move(-1,items.length);
     if(tapB()||tapMenu()){ closeAllMenus(); return; }
     if(tapA()){
@@ -1804,6 +1843,10 @@ function updateMenu(){
       else if(t.idx===2) MENU.stack.push({kind:"dex",idx:0});
       else if(t.idx===3) MENU.stack.push({kind:"badges"});
       else if(t.idx===4){ const ok=saveGame(); say([ok?"Game saved! (Stored in this browser.)":"Save failed — storage unavailable."]); }
+      else if(t.idx===5){
+        closeAllMenus();
+        ask("Enter EXPLORER MODE? Your adventure auto-saves; the whole map opens for sightseeing (no battles).",["Explore!","Cancel"],ci=>{ if(ci===0) enterExplorer(); });
+      }
       else closeAllMenus();
     }
   } else if(t.kind==="party"){
@@ -2253,6 +2296,7 @@ function endBattle(result){
     MUSIC.play(curMap().music||"town");
   }
   if(cb) cb(result);
+  autosave();
 }
 //////////////////// BATTLE UI STATE MACHINE ////////////////////
 function updateBattle(){
@@ -2392,6 +2436,7 @@ function enterGym(){
   const gi=curMap().gym;
   if(gi===undefined){ say(["It's locked."]); return; }
   const g=GYMS[gi];
+  if(G.explorer){ say(["Gym Guide: Trainers only beyond this point — but "+g.leader+"'s "+g.type+"-type hall is famous across Bharatva."]); return; }
   if(!canBattle()){ say(["Gym Guide: Rule one — you need at least one healthy Pokémon to challenge a gym!"]); return; }
   if(G.badges[gi]){ say([g.leader+": The "+g.badge+" suits you. Go make it proud."]); return; }
   ask(g.leader+"'s Gym — "+g.type+" type. Challenge the leader?",["Bring it on!","Not yet"],ci=>{
@@ -2407,6 +2452,13 @@ function enterGym(){
 }
 function storyDoor(){
   const kind=(curMap().doorD||{}).kind;
+  if(G.explorer){
+    if(kind==="factory"){ ask("DHUAN WORKS — abandoned site. Enter?",["Enter","Leave"],ci=>{ if(ci===0) warp("dhuanworks",10,13); }); return; }
+    if(kind==="spire"){ ask("Two paths wind up from the shrine gate.",["Meghdoot Spire","Him-Gufa (deep cave)","Leave"],ci=>{
+      if(ci===0) warp("meghdoot",7,7); else if(ci===1) warp("himgufa",7,6); }); return; }
+    say(["The door is open, but this story belongs to a trainer. You admire it from outside."]);
+    return;
+  }
   if(kind==="lab"){
     if(!G.flags.starter){ startIntroLab(); return; }
     say(["Prof. Neem: How's the journey? The dex data you're gathering is priceless.",
@@ -2675,7 +2727,7 @@ function drawWorld(){
   ctx.fillStyle="#f8e8b8"; ctx.font="bold 17px 'Trebuchet MS'"; ctx.textAlign="left";
   ctx.fillText(m.name,24,33);
   ctx.fillStyle="#c8b888"; ctx.font="13px 'Trebuchet MS'";
-  ctx.fillText("₹"+G.money,ctx.measureText(m.name).width+66,32);
+  ctx.fillText(G.explorer?"EXPLORER":"₹"+G.money,ctx.measureText(m.name).width+66,32);
 }
 //////////////////// RENDERING — MENUS ////////////////////
 function drawPanel(x,y,w,h){
@@ -2687,11 +2739,11 @@ function drawMenus(){
   const t=menuTop(); if(!t) return;
   ctx.font="bold 18px 'Trebuchet MS'"; ctx.textAlign="left";
   if(t.kind==="main"){
-    const items=["POKÉMON","BAG","POKÉDEX","BADGES","SAVE","EXIT"];
-    drawPanel(cv.width-210,12,196,items.length*38+22);
+    const items=G.explorer?["BACK TO ADVENTURE","KEEP EXPLORING"]:["POKÉMON","BAG","POKÉDEX","BADGES","SAVE","EXPLORER MODE","EXIT"];
+    drawPanel(cv.width-240,12,226,items.length*38+22);
     items.forEach((it,i)=>{
       ctx.fillStyle=i===t.idx?"#c05838":"#2a2440";
-      ctx.fillText((i===t.idx?"▶ ":"  ")+it,cv.width-190,44+i*38);
+      ctx.fillText((i===t.idx?"▶ ":"  ")+it,cv.width-220,44+i*38);
     });
   } else if(t.kind==="party"||t.kind==="box"){
     const isBox=t.kind==="box";
@@ -2934,7 +2986,7 @@ function drawTitle(){
   ctx.strokeText("BHARATVA",cv.width/2,168);
   ctx.fillStyle="#fff"; ctx.fillText("BHARATVA",cv.width/2,168);
   ctx.font="bold 18px 'Trebuchet MS'";
-  const opts=hasSave()?["CONTINUE","NEW GAME"]:["NEW GAME"];
+  const opts=hasSave()?["CONTINUE","NEW GAME","EXPLORE MAP"]:["NEW GAME","EXPLORE MAP"];
   opts.forEach((o,i)=>{
     ctx.fillStyle=i===titleSel?"#f8e050":"rgba(255,255,255,.85)";
     ctx.fillText((i===titleSel?"▶ ":"")+o,cv.width/2,368+i*36);
@@ -2945,19 +2997,22 @@ function drawTitle(){
 }
 let titleSel=0;
 function updateTitle(){
-  const opts=hasSave()?2:1;
-  if(tapped("arrowdown")||tapped("arrowup")){ titleSel=(titleSel+1)%opts; sfx.sel(); }
+  const n=hasSave()?3:2;
+  if(tapped("arrowdown")){ titleSel=(titleSel+1)%n; sfx.sel(); }
+  if(tapped("arrowup")){ titleSel=(titleSel+n-1)%n; sfx.sel(); }
   if(tapA()){
     audio(); sfx.ok();
-    if(hasSave()&&titleSel===0){
-      loadGame(); G.scene="world"; MUSIC.play(curMap().music||"town");
+    const pick=hasSave()?["continue","new","explore"][titleSel]:["new","explore"][titleSel];
+    if(pick==="explore"){ enterExplorer(); return; }
+    if(pick==="continue"){
+      loadGame(); G.explorer=false; G.scene="world"; MUSIC.play(curMap().music||"town");
     } else {
       // fresh state
       G.party=[]; G.box=[]; G.bag={"Poké Ball":5,"Potion":2}; G.money=3000;
       G.badges=[false,false,false,false,false,false,false,false]; G.flags={}; G.beaten={};
       G.map="nariyalpur"; G.px=10; G.py=6; G.dir=0; G.lastHeal={map:"nariyalpur",x:7,y:7};
       G.dexSeen=new Set(); G.dexCaught=new Set();
-      G.scene="world"; MUSIC.play("town");
+      G.explorer=false; G.scene="world"; MUSIC.play("town");
       say(["Welcome to BHARATVA — a region of eleven languages, a hundred festivals and a million Pokémon.",
            "You are a young trainer from Nariyalpur, the coconut village at the region's southern tip.",
            "Prof. Neem's lab is the building with the dark door. She's expecting you!",
