@@ -1,0 +1,3033 @@
+<title>Pokémon Bharatva</title>
+<style>
+  body{ margin:0; background:#141024; min-height:100vh; display:flex; flex-direction:column;
+    align-items:center; justify-content:center; font-family:"Trebuchet MS",Verdana,sans-serif; color:#e8e2f8; }
+  canvas{ display:block; background:#000; image-rendering:pixelated;
+    border-radius:8px; box-shadow:0 10px 44px rgba(0,0,0,.7), 0 0 0 5px #2a2246, 0 0 0 8px #c9862e;
+    max-width:96vw; height:auto; }
+  #help{ margin-top:12px; font-size:12.5px; color:#9c92c8; text-align:center; line-height:1.8; }
+  kbd{ background:#2a2246; border:1px solid #453a75; border-bottom-width:3px; border-radius:5px;
+    padding:1px 7px; font-size:11.5px; color:#fff; font-family:inherit; }
+</style>
+<canvas id="cv" width="720" height="480"></canvas>
+<div id="help">
+  <kbd>←→↑↓</kbd> move / choose &nbsp; <kbd>Z</kbd> A — talk · confirm &nbsp; <kbd>X</kbd> B — cancel · back &nbsp; <kbd>Enter</kbd> menu &nbsp; <kbd>M</kbd> music<br>
+  Save from the menu. Tall grass hides wild Pokémon. Gym doors, Centers (red) and Marts (blue) — walk in.
+</div>
+<script>
+"use strict";
+//////////////////////////////////////////////////////////////
+// POKEMON BHARATVA — a GBA-style fan region based on India //
+//////////////////////////////////////////////////////////////
+const cv=document.getElementById("cv"), ctx=cv.getContext("2d");
+const TS=48;                 // tile size on screen (16px art scaled x3 feel)
+const VW=15, VH=10;          // view in tiles
+let tick=0;
+
+//////////////////// INPUT ////////////////////
+const keys={}, pressed={};
+addEventListener("keydown",e=>{
+  const k=e.key.toLowerCase();
+  if(["arrowup","arrowdown","arrowleft","arrowright"," "].includes(k)) e.preventDefault();
+  if(!keys[k]) pressed[k]=true;
+  keys[k]=true;
+  if(k==="m"){ MUSIC.toggle(); }
+});
+addEventListener("keyup",e=>{ keys[e.key.toLowerCase()]=false; });
+function tapped(k){ return !!pressed[k]; }
+const A_KEYS=["z"," "], B_KEYS=["x"], MENU_KEYS=["enter"];
+function tapA(){ return A_KEYS.some(tapped); }
+function tapB(){ return B_KEYS.some(tapped); }
+function tapMenu(){ return MENU_KEYS.some(tapped); }
+function clearTaps(){ for(const k in pressed) delete pressed[k]; }
+
+//////////////////// AUDIO / INDIAN MUSIC ENGINE ////////////////////
+const AC=window.AudioContext||window.webkitAudioContext;
+let ac=null, masterGain=null;
+function audio(){
+  try{
+    if(!ac){ ac=new AC(); masterGain=ac.createGain(); masterGain.gain.value=0.5; masterGain.connect(ac.destination); }
+    if(ac.state==="suspended") ac.resume();
+  }catch(e){}
+  return ac;
+}
+function tone(freq,dur,type,vol,when,slide){
+  try{
+    const a=audio(); if(!a) return;
+    const t=(when||a.currentTime);
+    const o=a.createOscillator(), g=a.createGain();
+    o.type=type||"triangle"; o.frequency.setValueAtTime(freq,t);
+    if(slide) o.frequency.exponentialRampToValueAtTime(Math.max(20,slide),t+dur);
+    g.gain.setValueAtTime(0.0001,t);
+    g.gain.exponentialRampToValueAtTime(vol||0.1,t+0.015);
+    g.gain.exponentialRampToValueAtTime(0.0001,t+dur);
+    o.connect(g); g.connect(masterGain);
+    o.start(t); o.stop(t+dur+0.05);
+  }catch(e){}
+}
+// sitar-ish pluck: quick attack triangle + faint octave shimmer
+function pluck(freq,dur,vol,when){
+  tone(freq,dur,"triangle",vol,when);
+  tone(freq*2.01,dur*0.6,"sine",vol*0.35,when);
+}
+function tabla(kind,when){ // kind: "dha"(low) "na"(high tick)
+  try{
+    const a=audio(); if(!a) return;
+    const t=when||a.currentTime;
+    if(kind==="dha"){ tone(95,0.16,"sine",0.22,t,55); }
+    else{
+      const bufLen=0.04*a.sampleRate|0, buf=a.createBuffer(1,bufLen,a.sampleRate);
+      const d=buf.getChannelData(0);
+      for(let i=0;i<bufLen;i++) d[i]=(Math.random()*2-1)*(1-i/bufLen);
+      const s=a.createBufferSource(), g=a.createGain(), f=a.createBiquadFilter();
+      f.type="highpass"; f.frequency.value=3000;
+      g.gain.setValueAtTime(0.12,t); g.gain.exponentialRampToValueAtTime(0.001,t+0.05);
+      s.buffer=buf; s.connect(f); f.connect(g); g.connect(masterGain); s.start(t);
+    }
+  }catch(e){}
+}
+const sfx={
+  sel:()=>tone(880,0.06,"square",0.06),
+  ok:()=>{tone(660,0.07,"square",0.07);tone(990,0.09,"square",0.06,ac?ac.currentTime+0.06:0);},
+  no:()=>tone(200,0.12,"square",0.08),
+  bump:()=>tone(110,0.07,"square",0.06),
+  door:()=>tone(330,0.15,"triangle",0.09,0,180),
+  heal:()=>{[523,659,784,1047].forEach((f,i)=>setTimeout(()=>tone(f,0.14,"sine",0.09),i*110));},
+  hit:()=>tone(220,0.12,"sawtooth",0.10,0,110),
+  hitSuper:()=>tone(320,0.18,"sawtooth",0.13,0,90),
+  hitWeak:()=>tone(180,0.09,"sawtooth",0.07,0,120),
+  faint:()=>tone(300,0.5,"sawtooth",0.10,0,50),
+  ball:()=>tone(500,0.08,"square",0.09,0,700),
+  shake:()=>tone(240,0.09,"square",0.08),
+  caught:()=>{[392,523,659,784].forEach((f,i)=>setTimeout(()=>tone(f,0.16,"square",0.08),i*120));},
+  xp:()=>tone(760,0.05,"square",0.05),
+  lvl:()=>{[523,659,784,1047,1319].forEach((f,i)=>setTimeout(()=>tone(f,0.11,"square",0.08),i*70));},
+  badge:()=>{[440,554,659,880,1109,1319].forEach((f,i)=>setTimeout(()=>tone(f,0.15,"triangle",0.09),i*110));},
+  evolve:()=>{[330,392,494,587,740,880].forEach((f,i)=>setTimeout(()=>tone(f,0.2,"sine",0.08),i*140));},
+  money:()=>{tone(988,0.07,"square",0.08);setTimeout(()=>tone(1319,0.12,"square",0.08),70);},
+  run:()=>tone(600,0.2,"sawtooth",0.07,0,1400),
+};
+// ---- looping raga sequencer ----
+// scales as semitone offsets; melodies are deterministic per theme
+const RAGAS={
+  bhairav:[0,1,4,5,7,8,11],    // dawn — temples, towns
+  kafi:[0,2,3,5,7,9,10],       // folk — routes
+  bhairavi:[0,1,3,5,7,8,10],   // soulful — ganga, ending
+  todi:[0,1,3,6,7,8,11],       // tense — team dhuan
+  desh:[0,2,4,5,7,9,11],       // monsoon — water, beach
+  malkauns:[0,3,5,8,10],       // deep night — caves, ghost
+};
+const THEME_DEFS={
+  town:    {raga:"bhairav",  root:220,  tempo:0.42, pat:[0,2,1,2, 3,2,1,0, 2,4,3,2, 1,2,0,-1], tabla:[1,0,2,0, 1,0,2,2]},
+  route:   {raga:"kafi",     root:246.9,tempo:0.30, pat:[0,2,4,2, 5,4,2,0, 4,5,7,5, 4,2,1,0],  tabla:[1,2,0,2, 1,2,2,0]},
+  city:    {raga:"desh",     root:261.6,tempo:0.34, pat:[4,2,0,2, 4,5,4,2, 7,5,4,2, 0,1,2,-1], tabla:[1,0,2,2, 1,2,0,2]},
+  beach:   {raga:"desh",     root:196,  tempo:0.46, pat:[0,2,4,5, 4,2,0,-1, 2,4,5,7, 5,4,2,-1],tabla:[1,0,0,2, 0,2,0,0]},
+  cave:    {raga:"malkauns", root:174.6,tempo:0.5,  pat:[0,1,2,1, 0,-1,3,2, 1,0,1,-1, 2,1,0,-1],tabla:[1,0,0,0, 2,0,0,0]},
+  ghost:   {raga:"malkauns", root:155.6,tempo:0.55, pat:[2,1,0,-1, 3,2,1,-1, 4,3,2,1, 0,-1,1,-1],tabla:[1,0,0,2, 0,0,2,0]},
+  evil:    {raga:"todi",     root:207.7,tempo:0.26, pat:[0,0,3,0, 5,3,0,0, 6,5,3,1, 0,1,0,-1], tabla:[1,2,1,2, 1,2,1,2]},
+  battle:  {raga:"todi",     root:233.1,tempo:0.22, pat:[0,3,5,3, 6,5,3,0, 7,6,5,3, 5,3,1,0],  tabla:[1,2,2,2, 1,2,2,2]},
+  gym:     {raga:"kafi",     root:233.1,tempo:0.26, pat:[0,4,2,5, 4,7,5,9, 7,5,4,2, 4,2,1,0],  tabla:[1,2,1,2, 1,2,1,2]},
+  league:  {raga:"bhairav",  root:261.6,tempo:0.28, pat:[0,4,7,4, 8,7,4,0, 11,8,7,4, 7,4,1,0], tabla:[1,2,2,2, 1,2,2,2]},
+  ending:  {raga:"bhairavi", root:220,  tempo:0.5,  pat:[7,5,4,2, 0,2,4,5, 4,2,1,0, 2,1,0,-1], tabla:[1,0,2,0, 1,0,2,0]},
+  desert:  {raga:"bhairav",  root:196,  tempo:0.44, pat:[0,1,4,1, 5,4,1,0, 7,5,4,1, 0,1,0,-1], tabla:[1,0,2,0, 0,2,0,2]},
+  snow:    {raga:"bhairavi", root:293.7,tempo:0.48, pat:[4,2,0,2, 5,4,2,-1, 7,5,4,2, 1,0,1,-1],tabla:[1,0,0,0, 2,0,0,0]},
+};
+const MUSIC={
+  on:true, cur:null, step:0, nextT:0, timer:null,
+  play(name){
+    if(this.cur===name) return;
+    this.cur=name; this.step=0;
+    if(!this.timer) this.boot();
+  },
+  boot(){
+    this.timer=setInterval(()=>{
+      const a=audio(); if(!a||!this.on||!this.cur) return;
+      const def=THEME_DEFS[this.cur]; if(!def) return;
+      while(this.nextT<a.currentTime+0.25){
+        if(this.nextT<a.currentTime) this.nextT=a.currentTime+0.02;
+        const scale=RAGAS[def.raga], t=this.nextT, i=this.step;
+        // tanpura drone every beat 0 and 8
+        if(i%8===0) pluck(def.root/2,def.tempo*3,0.05,t);
+        if(i%8===4) pluck(def.root/2*1.5,def.tempo*2.5,0.035,t);
+        // melody
+        const deg=def.pat[i%def.pat.length];
+        if(deg>=0){
+          const oct=Math.floor(deg/scale.length), st=scale[deg%scale.length];
+          const f=def.root*Math.pow(2,(st+12*oct)/12);
+          pluck(f,def.tempo*1.6,0.075,t);
+          // meend (slide) accent occasionally
+          if(i%16===12) tone(f,def.tempo*1.4,"sine",0.03,t,f*1.12);
+        }
+        // tabla
+        const tb=def.tabla[i%def.tabla.length];
+        if(tb===1) tabla("dha",t); else if(tb===2) tabla("na",t);
+        this.nextT+=def.tempo; this.step++;
+      }
+    },120);
+  },
+  stop(){ this.cur=null; },
+  toggle(){ this.on=!this.on; },
+};
+
+//////////////////// TYPE CHART ////////////////////
+const TYPES=["Normal","Fire","Water","Grass","Electric","Ice","Fighting","Poison","Ground","Flying","Psychic","Bug","Rock","Ghost","Dragon","Steel","Fairy","Dark"];
+const TYPE_COLOR={Normal:"#a8a090",Fire:"#e8703a",Water:"#4a90d8",Grass:"#5cb84a",Electric:"#e8c832",Ice:"#8ad0d8",Fighting:"#b0442e",Poison:"#9a4a9a",Ground:"#d0b060",Flying:"#9aa8e8",Psychic:"#e85a88",Bug:"#a0b022",Rock:"#b8a048",Ghost:"#6a5a9a",Dragon:"#6a3ae8",Steel:"#a8a8c0",Fairy:"#e8a0c8",Dark:"#5a4a42"};
+// eff[att][def] multiplier; default 1
+const EFF={};
+TYPES.forEach(a=>{EFF[a]={};});
+function ef(a,list2,list05,list0){
+  list2.forEach(d=>EFF[a][d]=2); list05.forEach(d=>EFF[a][d]=0.5); (list0||[]).forEach(d=>EFF[a][d]=0);
+}
+ef("Normal",[],["Rock","Steel"],["Ghost"]);
+ef("Fire",["Grass","Ice","Bug","Steel"],["Fire","Water","Rock","Dragon"]);
+ef("Water",["Fire","Ground","Rock"],["Water","Grass","Dragon"]);
+ef("Grass",["Water","Ground","Rock"],["Fire","Grass","Poison","Flying","Bug","Dragon","Steel"]);
+ef("Electric",["Water","Flying"],["Grass","Electric","Dragon"],["Ground"]);
+ef("Ice",["Grass","Ground","Flying","Dragon"],["Fire","Water","Ice","Steel"]);
+ef("Fighting",["Normal","Ice","Rock","Steel","Dark"],["Poison","Flying","Psychic","Bug","Fairy"],["Ghost"]);
+ef("Poison",["Grass","Fairy"],["Poison","Ground","Rock","Ghost"],["Steel"]);
+ef("Ground",["Fire","Electric","Poison","Rock","Steel"],["Grass","Bug"],["Flying"]);
+ef("Flying",["Grass","Fighting","Bug"],["Electric","Rock","Steel"]);
+ef("Psychic",["Fighting","Poison"],["Psychic","Steel"],["Dark"]);
+ef("Bug",["Grass","Psychic","Dark"],["Fire","Fighting","Poison","Flying","Ghost","Steel","Fairy"]);
+ef("Rock",["Fire","Ice","Flying","Bug"],["Fighting","Ground","Steel"]);
+ef("Ghost",["Psychic","Ghost"],["Dark"],["Normal"]);
+ef("Dragon",["Dragon"],["Steel"],["Fairy"]);
+ef("Steel",["Ice","Rock","Fairy"],["Fire","Water","Electric","Steel"]);
+ef("Fairy",["Fighting","Dragon","Dark"],["Fire","Poison","Steel"]);
+ef("Dark",["Psychic","Ghost"],["Fighting","Dark","Fairy"]);
+function typeEff(att,defTypes){ let m=1; for(const d of defTypes){ const e=EFF[att][d]; if(e!==undefined) m*=e; } return m; }
+
+//////////////////// MOVES ////////////////////
+// cat: p=physical s=special x=status. fx: status/stages/drain/heal/recoil. pri: priority
+const MOVES={
+  "Tackle":{t:"Normal",cat:"p",pow:40,acc:100},
+  "Scratch":{t:"Normal",cat:"p",pow:40,acc:100},
+  "Quick Attack":{t:"Normal",cat:"p",pow:40,acc:100,pri:1},
+  "Slam":{t:"Normal",cat:"p",pow:80,acc:85},
+  "Hyper Voice":{t:"Normal",cat:"s",pow:90,acc:100},
+  "Growl":{t:"Normal",cat:"x",acc:100,fx:{stage:["foe","atk",-1]}},
+  "Leer":{t:"Normal",cat:"x",acc:100,fx:{stage:["foe","def",-1]}},
+  "Agility":{t:"Psychic",cat:"x",fx:{stage:["self","spd",2]}},
+  "Swords Dance":{t:"Normal",cat:"x",fx:{stage:["self","atk",2]}},
+  "Harden":{t:"Normal",cat:"x",fx:{stage:["self","def",1]}},
+  "Recover":{t:"Normal",cat:"x",fx:{heal:0.5}},
+  "Ember":{t:"Fire",cat:"s",pow:40,acc:100,fx:{status:"brn",chance:10}},
+  "Flame Wheel":{t:"Fire",cat:"p",pow:60,acc:100,fx:{status:"brn",chance:10}},
+  "Fire Fang":{t:"Fire",cat:"p",pow:65,acc:95,fx:{status:"brn",chance:10}},
+  "Flamethrower":{t:"Fire",cat:"s",pow:90,acc:100,fx:{status:"brn",chance:10}},
+  "Will-O-Wisp":{t:"Fire",cat:"x",acc:85,fx:{status:"brn",chance:100}},
+  "Water Gun":{t:"Water",cat:"s",pow:40,acc:100},
+  "Aqua Jet":{t:"Water",cat:"p",pow:40,acc:100,pri:1},
+  "Water Pulse":{t:"Water",cat:"s",pow:60,acc:100},
+  "Waterfall":{t:"Water",cat:"p",pow:80,acc:100},
+  "Hydro Pump":{t:"Water",cat:"s",pow:110,acc:80},
+  "Vine Whip":{t:"Grass",cat:"p",pow:45,acc:100},
+  "Bullet Seed":{t:"Grass",cat:"p",pow:50,acc:100},
+  "Razor Leaf":{t:"Grass",cat:"p",pow:55,acc:95,crit:1},
+  "Giga Drain":{t:"Grass",cat:"s",pow:75,acc:100,fx:{drain:0.5}},
+  "Leaf Blade":{t:"Grass",cat:"p",pow:90,acc:100,crit:1},
+  "Thunder Shock":{t:"Electric",cat:"s",pow:40,acc:100,fx:{status:"par",chance:10}},
+  "Spark":{t:"Electric",cat:"p",pow:65,acc:100,fx:{status:"par",chance:20}},
+  "Thunderbolt":{t:"Electric",cat:"s",pow:90,acc:100,fx:{status:"par",chance:10}},
+  "Thunder Wave":{t:"Electric",cat:"x",acc:90,fx:{status:"par",chance:100}},
+  "Ice Shard":{t:"Ice",cat:"p",pow:40,acc:100,pri:1},
+  "Ice Fang":{t:"Ice",cat:"p",pow:65,acc:95,fx:{status:"frz",chance:10}},
+  "Ice Beam":{t:"Ice",cat:"s",pow:90,acc:100,fx:{status:"frz",chance:10}},
+  "Blizzard":{t:"Ice",cat:"s",pow:110,acc:70,fx:{status:"frz",chance:10}},
+  "Karate Chop":{t:"Fighting",cat:"p",pow:50,acc:100,crit:1},
+  "Double Kick":{t:"Fighting",cat:"p",pow:30,acc:100,hits:2},
+  "Brick Break":{t:"Fighting",cat:"p",pow:75,acc:100},
+  "Close Combat":{t:"Fighting",cat:"p",pow:120,acc:100,fx:{stage:["self","def",-1]}},
+  "Poison Sting":{t:"Poison",cat:"p",pow:15,acc:100,fx:{status:"psn",chance:30}},
+  "Sludge":{t:"Poison",cat:"s",pow:65,acc:100,fx:{status:"psn",chance:30}},
+  "Sludge Bomb":{t:"Poison",cat:"s",pow:90,acc:100,fx:{status:"psn",chance:30}},
+  "Toxic":{t:"Poison",cat:"x",acc:90,fx:{status:"psn",chance:100}},
+  "Smog":{t:"Poison",cat:"s",pow:30,acc:70,fx:{status:"psn",chance:40}},
+  "Mud Shot":{t:"Ground",cat:"s",pow:55,acc:95,fx:{stage:["foe","spd",-1]}},
+  "Dig":{t:"Ground",cat:"p",pow:80,acc:100},
+  "Earthquake":{t:"Ground",cat:"p",pow:100,acc:100},
+  "Peck":{t:"Flying",cat:"p",pow:35,acc:100},
+  "Wing Attack":{t:"Flying",cat:"p",pow:60,acc:100},
+  "Air Slash":{t:"Flying",cat:"s",pow:75,acc:95},
+  "Brave Bird":{t:"Flying",cat:"p",pow:120,acc:100,fx:{recoil:0.33}},
+  "Confusion":{t:"Psychic",cat:"s",pow:50,acc:100},
+  "Psybeam":{t:"Psychic",cat:"s",pow:65,acc:100},
+  "Psychic":{t:"Psychic",cat:"s",pow:90,acc:100,fx:{stage:["foe","spc",-1],chance:10}},
+  "Hypnosis":{t:"Psychic",cat:"x",acc:60,fx:{status:"slp",chance:100}},
+  "Bug Bite":{t:"Bug",cat:"p",pow:60,acc:100},
+  "X-Scissor":{t:"Bug",cat:"p",pow:80,acc:100},
+  "Rock Throw":{t:"Rock",cat:"p",pow:50,acc:90},
+  "Rock Slide":{t:"Rock",cat:"p",pow:75,acc:90},
+  "Stone Edge":{t:"Rock",cat:"p",pow:100,acc:80,crit:1},
+  "Lick":{t:"Ghost",cat:"p",pow:30,acc:100,fx:{status:"par",chance:30}},
+  "Shadow Sneak":{t:"Ghost",cat:"p",pow:40,acc:100,pri:1},
+  "Shadow Ball":{t:"Ghost",cat:"s",pow:80,acc:100,fx:{stage:["foe","spc",-1],chance:20}},
+  "Dragon Breath":{t:"Dragon",cat:"s",pow:60,acc:100,fx:{status:"par",chance:30}},
+  "Dragon Claw":{t:"Dragon",cat:"p",pow:80,acc:100},
+  "Dragon Pulse":{t:"Dragon",cat:"s",pow:85,acc:100},
+  "Metal Claw":{t:"Steel",cat:"p",pow:50,acc:95,fx:{stage:["self","atk",1],chance:10}},
+  "Iron Head":{t:"Steel",cat:"p",pow:80,acc:100},
+  "Flash Cannon":{t:"Steel",cat:"s",pow:80,acc:100},
+  "Fairy Wind":{t:"Fairy",cat:"s",pow:40,acc:100},
+  "Play Rough":{t:"Fairy",cat:"p",pow:90,acc:90},
+  "Dazzling Gleam":{t:"Fairy",cat:"s",pow:80,acc:100},
+  "Bite":{t:"Dark",cat:"p",pow:60,acc:100},
+  "Crunch":{t:"Dark",cat:"p",pow:80,acc:100,fx:{stage:["foe","def",-1],chance:20}},
+  "Night Slash":{t:"Dark",cat:"p",pow:70,acc:100,crit:1},
+  "Thunder":{t:"Electric",cat:"s",pow:110,acc:70,fx:{status:"par",chance:30}},
+  "Hurricane":{t:"Flying",cat:"s",pow:110,acc:70},
+  "Eruption":{t:"Fire",cat:"s",pow:100,acc:90},
+};
+</script>
+<script>
+"use strict";
+//////////////////// SPECIES DEX (71 new Pokémon, Bharatva region) ////////////////////
+// bs:[hp,atk,def,spd,spc] cr:catchRate xp:yield mv:[[lvl,move]] evo:[lvl,idx]
+// form: sprite archetype; c:[main,belly/second,accent]; sz: draw scale
+const DEX=[
+/*0*/ {n:"Pavling",t:["Grass"],bs:[45,45,40,55,50],cr:45,xp:62,form:"bird",c:["#3f9e4d","#7fd06a","#2a5fb0"],sz:0.8,
+   mv:[[1,"Tackle"],[1,"Growl"],[6,"Vine Whip"],[10,"Peck"],[14,"Razor Leaf"],[19,"Wing Attack"]],evo:[16,1],
+   dex:"A peachick that naps under coconut palms. Its tail buds sparkle with dew."},
+/*1*/ {n:"Pavaan",t:["Grass"],bs:[60,60,55,75,65],cr:45,xp:142,form:"bird",c:["#2f8f3f","#8fdc74","#2a5fb0"],sz:1.0,
+   mv:[[1,"Tackle"],[1,"Vine Whip"],[16,"Razor Leaf"],[22,"Wing Attack"],[28,"Giga Drain"]],evo:[32,2],
+   dex:"Its half-grown train fans out when it dances before the monsoon rain."},
+/*2*/ {n:"Mayurajah",t:["Grass","Flying"],bs:[80,85,70,100,105],cr:45,xp:236,form:"bird",c:["#1f7f37","#42c8e0","#e8c832"],sz:1.3,
+   mv:[[1,"Vine Whip"],[1,"Wing Attack"],[32,"Leaf Blade"],[38,"Air Slash"],[46,"Hurricane"],[52,"Leaf Blade"]],
+   dex:"The raja of peafowl. A hundred emerald eyes on its train are said to see the future."},
+/*3*/ {n:"Shervi",t:["Fire"],bs:[44,55,38,58,48],cr:45,xp:62,form:"cat",c:["#e8883a","#f8d8a8","#3a3430"],sz:0.8,
+   mv:[[1,"Scratch"],[1,"Leer"],[6,"Ember"],[10,"Bite"],[14,"Flame Wheel"],[19,"Fire Fang"]],evo:[16,4],
+   dex:"A Bengal cub with smoldering stripes. It practices pouncing on sparks."},
+/*4*/ {n:"Sherblaze",t:["Fire"],bs:[58,75,52,80,62],cr:45,xp:142,form:"cat",c:["#e06a28","#f8d8a8","#2a2420"],sz:1.05,
+   mv:[[1,"Scratch"],[1,"Ember"],[16,"Flame Wheel"],[22,"Fire Fang"],[28,"Night Slash"]],evo:[34,5],
+   dex:"Its stripes glow like embers in the dark mangroves of the delta."},
+/*5*/ {n:"Raajsher",t:["Fire","Dark"],bs:[85,110,70,95,80],cr:45,xp:240,form:"cat",c:["#d85818","#f8e0b0","#1a1410"],sz:1.35,
+   mv:[[1,"Fire Fang"],[1,"Night Slash"],[34,"Flamethrower"],[40,"Crunch"],[47,"Close Combat"],[54,"Eruption"]],
+   dex:"The royal tiger of Bharatva. Its roar carries across an entire forest at dusk."},
+/*6*/ {n:"Gharpup",t:["Water"],bs:[50,48,50,40,52],cr:45,xp:63,form:"croc",c:["#4a8a9e","#c8e8d8","#2a5a48"],sz:0.85,
+   mv:[[1,"Tackle"],[1,"Leer"],[6,"Water Gun"],[10,"Bite"],[14,"Mud Shot"],[19,"Water Pulse"]],evo:[16,7],
+   dex:"A gharial hatchling with a bump on its long snout. It floats like a twig."},
+/*7*/ {n:"Gharivar",t:["Water"],bs:[68,65,68,55,70],cr:45,xp:145,form:"croc",c:["#3a7a90","#c8e8d8","#204838"],sz:1.1,
+   mv:[[1,"Water Gun"],[1,"Bite"],[16,"Water Pulse"],[22,"Mud Shot"],[28,"Crunch"]],evo:[34,8],
+   dex:"It herds fish upriver with sweeps of its saw-like snout."},
+/*8*/ {n:"Gangraj",t:["Water","Dragon"],bs:[92,90,88,70,100],cr:45,xp:241,form:"croc",c:["#2a6a88","#d8f0e0","#e8c832"],sz:1.4,
+   mv:[[1,"Water Pulse"],[1,"Crunch"],[34,"Waterfall"],[40,"Dragon Pulse"],[47,"Hydro Pump"],[54,"Dragon Claw"]],
+   dex:"An ancient river dragon. Where it swims, the great river runs clean and full."},
+/*9*/ {n:"Bandarr",t:["Normal"],bs:[45,55,35,70,35],cr:190,xp:51,form:"monkey",c:["#b08858","#e8d0b0","#c04838"],sz:0.85,
+   mv:[[1,"Scratch"],[1,"Leer"],[7,"Quick Attack"],[13,"Bite"],[19,"Slam"]],evo:[22,10],
+   dex:"A temple macaque infamous for stealing snacks, spectacles and phones."},
+/*10*/{n:"Langoor",t:["Normal","Fighting"],bs:[70,90,60,95,55],cr:90,xp:160,form:"monkey",c:["#c8c0b0","#3a3430","#c04838"],sz:1.15,
+   mv:[[1,"Quick Attack"],[1,"Karate Chop"],[24,"Brick Break"],[31,"Slam"],[38,"Close Combat"]],
+   dex:"A grey langur that guards whole neighbourhoods. Its long tail never touches the ground."},
+/*11*/{n:"Mitthu",t:["Flying"],bs:[40,45,35,72,45],cr:190,xp:50,form:"bird",c:["#4db84a","#a8e090","#e04838"],sz:0.7,
+   mv:[[1,"Peck"],[1,"Growl"],[8,"Quick Attack"],[14,"Wing Attack"]],evo:[20,12],
+   dex:"A rose-ringed parakeet that repeats whatever trainers shout in battle."},
+/*12*/{n:"Torakeet",t:["Flying","Psychic"],bs:[62,60,55,105,85],cr:90,xp:158,form:"bird",c:["#2f9e3f","#c8f0a8","#e04838"],sz:1.0,
+   mv:[[1,"Wing Attack"],[1,"Confusion"],[23,"Psybeam"],[30,"Air Slash"],[38,"Psychic"]],
+   dex:"It mimics human speech so well that it once talked its way out of a cage."},
+/*13*/{n:"Keedler",t:["Bug"],bs:[40,35,50,25,25],cr:255,xp:39,form:"bug",c:["#8aa03a","#d8e8a0","#3a3430"],sz:0.65,
+   mv:[[1,"Tackle"],[1,"Harden"],[7,"Bug Bite"],[10,"Poison Sting"]],evo:[12,14],
+   dex:"It chews neem leaves and stores the bitterness as a defence."},
+/*14*/{n:"Titlifly",t:["Bug","Flying"],bs:[60,45,50,80,80],cr:120,xp:130,form:"moth",c:["#e8983a","#f8e0b0","#3a3430"],sz:0.95,
+   mv:[[1,"Bug Bite"],[12,"Confusion"],[17,"Wing Attack"],[24,"Psybeam"],[31,"Air Slash"]],
+   dex:"A tiger-striped butterfly. Clouds of them cross the Ghats before the rains."},
+/*15*/{n:"Deshdog",t:["Normal"],bs:[52,58,42,68,38],cr:220,xp:55,form:"dog",c:["#c8a060","#f0e0c0","#3a3430"],sz:0.85,
+   mv:[[1,"Tackle"],[1,"Growl"],[8,"Bite"],[14,"Quick Attack"],[20,"Crunch"]],evo:[24,16],
+   dex:"A loyal street dog. It knows every gully and shortcut in its city."},
+/*16*/{n:"Pariyah",t:["Dark"],bs:[72,88,60,92,55],cr:110,xp:162,form:"dog",c:["#5a4a3a","#c8a878","#e8c832"],sz:1.1,
+   mv:[[1,"Bite"],[1,"Quick Attack"],[26,"Crunch"],[33,"Night Slash"],[40,"Play Rough"]],
+   dex:"Under the streetlights it becomes a shadow that guards the sleeping lane."},
+/*17*/{n:"Gomata",t:["Normal","Fairy"],bs:[95,55,70,35,65],cr:100,xp:150,form:"quad",c:["#e8e0d0","#f8f0e0","#c89040"],sz:1.2,
+   mv:[[1,"Tackle"],[1,"Growl"],[12,"Fairy Wind"],[20,"Slam"],[28,"Recover"],[36,"Play Rough"]],
+   dex:"A gentle zebu revered in every village. Traffic waits patiently as it crosses."},
+/*18*/{n:"Naagling",t:["Poison"],bs:[42,55,40,60,45],cr:190,xp:55,form:"snake",c:["#6a8a3a","#d8d090","#3a3430"],sz:0.75,
+   mv:[[1,"Poison Sting"],[1,"Leer"],[9,"Bite"],[15,"Sludge"],[22,"Toxic"]],evo:[26,19],
+   dex:"A young cobra that sways to flute music out of pure curiosity."},
+/*19*/{n:"Kingnaag",t:["Poison","Dragon"],bs:[75,95,70,85,90],cr:75,xp:190,form:"snake",c:["#4a6a2a","#e8d890","#e8c832"],sz:1.25,
+   mv:[[1,"Sludge"],[1,"Bite"],[28,"Dragon Breath"],[35,"Sludge Bomb"],[43,"Crunch"],[50,"Dragon Pulse"]],
+   dex:"A king cobra of the deep Ghats. Its raised hood is taller than a person."},
+/*20*/{n:"Rikkitik",t:["Normal"],bs:[48,60,40,80,35],cr:190,xp:57,form:"weasel",c:["#b09868","#e8d8b8","#3a3430"],sz:0.8,
+   mv:[[1,"Scratch"],[1,"Quick Attack"],[10,"Bite"],[16,"Agility"]],evo:[24,21],
+   dex:"A fearless mongoose. It picks fights with snakes ten times its size — and wins."},
+/*21*/{n:"Mongfury",t:["Normal","Dark"],bs:[70,95,55,110,50],cr:90,xp:165,form:"weasel",c:["#987848","#e8d8b8","#c04838"],sz:1.05,
+   mv:[[1,"Quick Attack"],[1,"Bite"],[26,"Night Slash"],[33,"Crunch"],[40,"Close Combat"]],
+   dex:"Its reflexes are so sharp it can dodge a cobra strike mid-yawn."},
+/*22*/{n:"Hathkin",t:["Ground"],bs:[70,65,60,30,40],cr:150,xp:90,form:"elephant",c:["#9a8a98","#c8b8c8","#e8c832"],sz:1.0,
+   mv:[[1,"Tackle"],[1,"Growl"],[10,"Mud Shot"],[18,"Slam"],[26,"Dig"]],evo:[30,23],
+   dex:"A calf elephant that trumpets at butterflies. Painted patterns appear on festival days."},
+/*23*/{n:"Gajraj",t:["Ground"],bs:[105,105,85,45,60],cr:60,xp:200,form:"elephant",c:["#7a6a78","#b8a8b8","#e8c832"],sz:1.45,
+   mv:[[1,"Mud Shot"],[1,"Slam"],[32,"Dig"],[38,"Iron Head"],[46,"Earthquake"]],
+   dex:"A tusker that remembers every kindness. Temples open their gates when it visits."},
+/*24*/{n:"Rohufin",t:["Water"],bs:[40,42,45,60,40],cr:255,xp:42,form:"fish",c:["#7a9ab8","#d8e8f0","#e8883a"],sz:0.7,
+   mv:[[1,"Tackle"],[1,"Water Gun"],[12,"Aqua Jet"],[18,"Water Pulse"]],evo:[22,25],
+   dex:"A river carp that leaps for flies. Fisherfolk consider a leaping Rohufin good luck."},
+/*25*/{n:"Mahseer",t:["Water"],bs:[70,80,65,85,60],cr:110,xp:155,form:"fish",c:["#5a7a9e","#e8d8a0","#c89040"],sz:1.1,
+   mv:[[1,"Aqua Jet"],[1,"Water Pulse"],[24,"Waterfall"],[32,"Slam"],[40,"Hydro Pump"]],
+   dex:"The golden tiger of the river. Hooking one is a legend told for generations."},
+/*26*/{n:"Kekdaa",t:["Water","Rock"],bs:[55,75,90,30,45],cr:150,xp:110,form:"crab",c:["#c86a3a","#f0d0a8","#3a3430"],sz:0.85,
+   mv:[[1,"Scratch"],[1,"Harden"],[12,"Rock Throw"],[19,"Water Pulse"],[27,"Rock Slide"],[35,"Crunch"]],
+   dex:"It sculpts little sand forts on the beach and pinches anyone who steps on them."},
+/*27*/{n:"Flaminga",t:["Water","Flying"],bs:[65,55,50,90,75],cr:120,xp:140,form:"bird",c:["#f09ab0","#f8d8e0","#3a3430"],sz:1.05,
+   mv:[[1,"Peck"],[1,"Water Gun"],[16,"Wing Attack"],[24,"Water Pulse"],[32,"Air Slash"],[40,"Hurricane"]],
+   dex:"Thousands turn the salt lagoons pink each winter. It sleeps on one leg."},
+/*28*/{n:"Kamalil",t:["Water","Grass"],bs:[55,40,55,40,70],cr:150,xp:95,form:"plant",c:["#e88ab0","#8fd06a","#f8e0b0"],sz:0.8,
+   mv:[[1,"Water Gun"],[1,"Growl"],[10,"Bullet Seed"],[17,"Water Pulse"],[24,"Giga Drain"]],evo:[28,29],
+   dex:"A lotus bud that drifts on temple ponds, humming when the sun rises."},
+/*29*/{n:"Padmaraj",t:["Water","Grass"],bs:[80,60,75,60,105],cr:70,xp:190,form:"plant",c:["#e06a98","#5cb84a","#e8c832"],sz:1.2,
+   mv:[[1,"Water Pulse"],[1,"Giga Drain"],[30,"Dazzling Gleam"],[37,"Hydro Pump"],[44,"Leaf Blade"]],
+   dex:"A blooming lotus sovereign. Muddy water turns crystal-clear around its petals."},
+/*30*/{n:"Chaipat",t:["Grass"],bs:[45,35,50,45,60],cr:190,xp:58,form:"plant",c:["#5a9e3a","#b8e090","#8a5a2a"],sz:0.7,
+   mv:[[1,"Vine Whip"],[1,"Growl"],[9,"Bullet Seed"],[16,"Razor Leaf"],[23,"Giga Drain"]],evo:[26,31],
+   dex:"Two leaves and a bud. It smells faintly of the morning's first brew."},
+/*31*/{n:"Chaisage",t:["Grass","Psychic"],bs:[70,50,70,65,100],cr:90,xp:170,form:"plant",c:["#3f8f2f","#d8f0b0","#c89040"],sz:1.0,
+   mv:[[1,"Razor Leaf"],[1,"Confusion"],[28,"Psybeam"],[35,"Giga Drain"],[42,"Psychic"],[49,"Leaf Blade"]],
+   dex:"A wise tea-garden spirit of the eastern hills. Its steam shows glimpses of tomorrow."},
+/*32*/{n:"Banyip",t:["Grass","Ghost"],bs:[50,55,60,35,60],cr:150,xp:100,form:"tree",c:["#4a7a3a","#8a6a48","#e8e0d0"],sz:0.85,
+   mv:[[1,"Vine Whip"],[1,"Lick"],[12,"Shadow Sneak"],[19,"Razor Leaf"],[26,"Shadow Ball"]],evo:[30,33],
+   dex:"A banyan sapling haunted by an old story. Its hanging roots wave with no wind."},
+/*33*/{n:"Vatvriksh",t:["Grass","Ghost"],bs:[85,80,95,40,90],cr:70,xp:195,form:"tree",c:["#2f5f2a","#6a4a30","#e8e0d0"],sz:1.4,
+   mv:[[1,"Razor Leaf"],[1,"Shadow Sneak"],[32,"Shadow Ball"],[39,"Giga Drain"],[47,"Leaf Blade"]],
+   dex:"A 500-year banyan. Whole villages hold councils beneath it; the tree listens."},
+/*34*/{n:"Bijlu",t:["Electric"],bs:[40,40,35,90,55],cr:190,xp:55,form:"mouse",c:["#e8c832","#f8f0c0","#2a5fb0"],sz:0.7,
+   mv:[[1,"Thunder Shock"],[1,"Growl"],[8,"Quick Attack"],[15,"Spark"],[22,"Thunder Wave"]],evo:[25,35],
+   dex:"A palm squirrel charged with static. The stripes on its back are scorch marks."},
+/*35*/{n:"Voltuktuk",t:["Electric","Steel"],bs:[70,75,80,95,85],cr:75,xp:185,form:"machine",c:["#e8c832","#2a8a4a","#3a3430"],sz:1.2,
+   mv:[[1,"Spark"],[1,"Metal Claw"],[27,"Thunderbolt"],[34,"Iron Head"],[42,"Thunder"],[48,"Flash Cannon"]],
+   dex:"A living auto-rickshaw spirit. Its horn precedes it through any traffic jam."},
+/*36*/{n:"Nautanki",t:["Psychic","Fairy"],bs:[65,50,55,85,95],cr:110,xp:160,form:"fairy",c:["#e85a88","#f8d8a8","#e8c832"],sz:0.95,
+   mv:[[1,"Confusion"],[1,"Fairy Wind"],[18,"Psybeam"],[26,"Dazzling Gleam"],[34,"Hypnosis"],[42,"Psychic"]],
+   dex:"A dancer spirit born from a hundred years of film songs. It battles in mudras."},
+/*37*/{n:"Kabaddik",t:["Fighting"],bs:[60,75,55,65,35],cr:180,xp:88,form:"fighter",c:["#c07840","#f0d0a8","#2a5fb0"],sz:0.9,
+   mv:[[1,"Tackle"],[1,"Karate Chop"],[12,"Double Kick"],[20,"Brick Break"]],evo:[28,38],
+   dex:"It holds its breath and chants as it raids. Tag it before it crosses back!"},
+/*38*/{n:"Kushtigar",t:["Fighting"],bs:[90,110,80,70,45],cr:75,xp:190,form:"fighter",c:["#a05828","#f0d0a8","#c04838"],sz:1.25,
+   mv:[[1,"Karate Chop"],[1,"Brick Break"],[30,"Slam"],[38,"Close Combat"],[46,"Stone Edge"]],
+   dex:"An akhada champion. It oils its shoulders at dawn and wrestles bulls for practice."},
+/*39*/{n:"Pattharo",t:["Rock"],bs:[55,70,90,25,30],cr:190,xp:77,form:"golem",c:["#b09878","#d8c8a8","#6a5a48"],sz:0.85,
+   mv:[[1,"Tackle"],[1,"Harden"],[10,"Rock Throw"],[18,"Mud Shot"],[26,"Rock Slide"]],evo:[30,40],
+   dex:"A chunk of carved sandstone that woke up. It dreams of the fort it once was."},
+/*40*/{n:"Graniteja",t:["Rock","Fighting"],bs:[80,105,110,35,45],cr:75,xp:195,form:"golem",c:["#8a7858","#c8b898","#c04838"],sz:1.3,
+   mv:[[1,"Rock Throw"],[1,"Karate Chop"],[32,"Rock Slide"],[39,"Brick Break"],[47,"Stone Edge"],[54,"Earthquake"]],
+   dex:"Its body is temple granite. Sculptors weep at the perfection of its carvings."},
+/*41*/{n:"Oontel",t:["Ground"],bs:[65,55,50,45,40],cr:170,xp:85,form:"quad",c:["#d8a858","#f0d8a8","#8a5a2a"],sz:1.0,
+   mv:[[1,"Tackle"],[1,"Growl"],[11,"Mud Shot"],[19,"Slam"],[27,"Dig"]],evo:[30,42],
+   dex:"A young camel that hums folk tunes. It stores chai in its hump — or so kids say."},
+/*42*/{n:"Tharaback",t:["Ground","Fire"],bs:[95,90,70,55,70],cr:75,xp:190,form:"quad",c:["#c89040","#f0d8a8","#e06a28"],sz:1.35,
+   mv:[[1,"Mud Shot"],[1,"Flame Wheel"],[32,"Dig"],[39,"Flamethrower"],[47,"Earthquake"]],
+   dex:"The ship of the Thar. Heat shimmers rise from its twin humps at noon."},
+/*43*/{n:"Registail",t:["Ground","Dark"],bs:[60,70,50,100,50],cr:130,xp:130,form:"fox",c:["#e0b878","#f8e8c8","#3a3430"],sz:0.9,
+   mv:[[1,"Scratch"],[1,"Quick Attack"],[14,"Mud Shot"],[21,"Bite"],[29,"Night Slash"],[37,"Dig"]],
+   dex:"A desert fox that surfs down dunes on its huge ears at midnight."},
+/*44*/{n:"Bicchoo",t:["Bug","Poison"],bs:[45,60,55,50,30],cr:190,xp:70,form:"bug",c:["#8a4a2a","#c8925a","#3a3430"],sz:0.75,
+   mv:[[1,"Poison Sting"],[1,"Leer"],[10,"Bug Bite"],[17,"Harden"],[24,"Sludge"]],evo:[28,45],
+   dex:"It hides in old jootis. Always shake your shoes in the desert."},
+/*45*/{n:"Vrishkor",t:["Poison","Dark"],bs:[70,95,75,65,55],cr:90,xp:175,form:"bug",c:["#5a2a1a","#a86a3a","#c04838"],sz:1.1,
+   mv:[[1,"Sludge"],[1,"Bite"],[30,"Night Slash"],[37,"Sludge Bomb"],[45,"Crunch"],[52,"X-Scissor"]],
+   dex:"A fortress scorpion. Its sting glows faintly green under the desert moon."},
+/*46*/{n:"Machharr",t:["Bug","Poison"],bs:[35,45,30,95,45],cr:255,xp:48,form:"moth",c:["#7a7a8a","#c8c8d8","#c04838"],sz:0.6,
+   mv:[[1,"Poison Sting"],[1,"Leer"],[8,"Bug Bite"],[14,"Toxic"],[20,"Wing Attack"],[28,"Sludge"]],
+   dex:"Its whine in the ear at 3 a.m. has broken stronger trainers than any gym."},
+/*47*/{n:"Diyaati",t:["Ghost","Fire"],bs:[45,35,45,60,80],cr:150,xp:95,form:"ghost",c:["#e8983a","#f8e0b0","#6a5a9a"],sz:0.7,
+   mv:[[1,"Ember"],[1,"Lick"],[10,"Shadow Sneak"],[17,"Will-O-Wisp"],[24,"Flame Wheel"]],evo:[30,48],
+   dex:"A clay lamp lit for someone long gone. Its flame never flickers, even in storms."},
+/*48*/{n:"Aartilume",t:["Ghost","Fire"],bs:[65,50,60,85,115],cr:70,xp:190,form:"ghost",c:["#e8703a","#f8e8c0","#4a3a7a"],sz:1.05,
+   mv:[[1,"Flame Wheel"],[1,"Shadow Sneak"],[32,"Shadow Ball"],[39,"Flamethrower"],[46,"Hypnosis"]],
+   dex:"A hundred and eight flames orbit it during evening prayers on the river."},
+/*49*/{n:"Thailee",t:["Ghost","Poison"],bs:[50,40,55,70,75],cr:150,xp:100,form:"ghost",c:["#8a9ab8","#d8e0e8","#3a3430"],sz:0.8,
+   mv:[[1,"Lick"],[1,"Smog"],[12,"Shadow Sneak"],[19,"Sludge"],[27,"Shadow Ball"],[35,"Sludge Bomb"]],
+   dex:"A discarded plastic bag possessed by regret. It clings to careless litterers."},
+/*50*/{n:"Kachrat",t:["Poison"],bs:[42,55,40,75,35],cr:220,xp:52,form:"mouse",c:["#6a5a4a","#a89888","#8aa03a"],sz:0.7,
+   mv:[[1,"Scratch"],[1,"Smog"],[9,"Bite"],[15,"Sludge"],[21,"Quick Attack"]],evo:[24,51],
+   dex:"It nests in unsorted garbage. Cities that segregate waste rarely see it."},
+/*51*/{n:"Kudastra",t:["Poison","Dark"],bs:[68,90,60,95,60],cr:100,xp:165,form:"mouse",c:["#4a3a2a","#8a7a68","#5cb84a"],sz:1.0,
+   mv:[[1,"Sludge"],[1,"Bite"],[26,"Crunch"],[33,"Sludge Bomb"],[41,"Night Slash"]],
+   dex:"King of the landfill. Its whiskers can smell a shortcut through any maze."},
+/*52*/{n:"Dhuandu",t:["Poison","Fire"],bs:[50,40,45,55,70],cr:150,xp:98,form:"cloud",c:["#6a6a72","#a8a8b0","#e06a28"],sz:0.8,
+   mv:[[1,"Smog"],[1,"Ember"],[12,"Sludge"],[19,"Will-O-Wisp"],[26,"Flame Wheel"]],evo:[32,53],
+   dex:"A puff of factory smoke that learned to breathe. It smells of burnt diesel."},
+/*53*/{n:"Smogasur",t:["Poison","Fire"],bs:[80,65,70,75,105],cr:70,xp:195,form:"cloud",c:["#4a4a52","#8a8a92","#e04818"],sz:1.25,
+   mv:[[1,"Sludge"],[1,"Flame Wheel"],[34,"Sludge Bomb"],[41,"Flamethrower"],[48,"Toxic"]],
+   dex:"A smog bank with burning eyes. Winter mornings grow dark when it settles on a city."},
+/*54*/{n:"Susurin",t:["Water","Psychic"],bs:[75,55,60,70,95],cr:60,xp:180,form:"fish",c:["#8a9ab8","#d8e0f0","#e85a88"],sz:1.1,
+   mv:[[1,"Water Pulse"],[1,"Confusion"],[20,"Aqua Jet"],[28,"Psybeam"],[36,"Psychic"],[44,"Hydro Pump"]],
+   dex:"A blind river dolphin that sees with song. Hearing it at dawn brings a good year."},
+/*55*/{n:"Pangolix",t:["Steel","Ground"],bs:[70,80,110,40,45],cr:90,xp:175,form:"golem",c:["#a89058","#d8c8a8","#6a5a48"],sz:1.0,
+   mv:[[1,"Scratch"],[1,"Harden"],[14,"Metal Claw"],[22,"Mud Shot"],[30,"Iron Head"],[38,"Dig"],[46,"Earthquake"]],
+   dex:"Its scales are living armour. It curls into a perfect, un-stealable sphere."},
+/*56*/{n:"Lohaar",t:["Steel"],bs:[55,70,75,40,35],cr:150,xp:90,form:"golem",c:["#8a8a9a","#c8c8d8","#e06a28"],sz:0.85,
+   mv:[[1,"Tackle"],[1,"Metal Claw"],[12,"Harden"],[20,"Iron Head"]],evo:[30,57],
+   dex:"Born from a blacksmith's last forge. Sparks fly when it claps its hands."},
+/*57*/{n:"Ispaton",t:["Steel","Fighting"],bs:[80,105,95,55,50],cr:75,xp:190,form:"fighter",c:["#6a6a7a","#b8b8c8","#e8c832"],sz:1.25,
+   mv:[[1,"Metal Claw"],[1,"Brick Break"],[32,"Iron Head"],[39,"Close Combat"],[47,"Flash Cannon"]],
+   dex:"A steel-mill titan. It shapes girders with bare-fisted hammer blows."},
+/*58*/{n:"Himbagh",t:["Ice"],bs:[55,65,45,85,50],cr:130,xp:105,form:"cat",c:["#c8d8e8","#f0f8ff","#3a3430"],sz:0.9,
+   mv:[[1,"Scratch"],[1,"Leer"],[12,"Ice Shard"],[19,"Bite"],[26,"Ice Fang"]],evo:[32,59],
+   dex:"A snow leopard cub, almost invisible against the scree. Its tail is its scarf."},
+/*59*/{n:"Himraaj",t:["Ice","Dark"],bs:[75,100,65,115,70],cr:60,xp:195,form:"cat",c:["#a8bcd0","#e8f0f8","#1a1410"],sz:1.2,
+   mv:[[1,"Ice Fang"],[1,"Night Slash"],[34,"Ice Beam"],[41,"Crunch"],[48,"Blizzard"]],
+   dex:"The grey ghost of the Himalaya. Most trainers only ever find its footprints."},
+/*60*/{n:"Yakku",t:["Ice","Ground"],bs:[95,85,80,35,45],cr:110,xp:170,form:"quad",c:["#5a4a3a","#e8e0d0","#c89040"],sz:1.3,
+   mv:[[1,"Tackle"],[1,"Mud Shot"],[16,"Ice Shard"],[24,"Slam"],[32,"Ice Fang"],[40,"Earthquake"]],
+   dex:"It carries pilgrims' packs up the high passes without being asked."},
+/*61*/{n:"Monalis",t:["Ice","Flying"],bs:[65,60,55,95,80],cr:110,xp:160,form:"bird",c:["#4a8ac8","#8ae0d8","#e8c832"],sz:1.0,
+   mv:[[1,"Peck"],[1,"Ice Shard"],[18,"Wing Attack"],[26,"Ice Fang"],[34,"Air Slash"],[42,"Ice Beam"]],
+   dex:"A nine-coloured pheasant of the peaks. Its feathers refuse to hold frost."},
+/*62*/{n:"Bhalux",t:["Normal","Dark"],bs:[85,95,60,55,45],cr:110,xp:165,form:"bear",c:["#3a3430","#8a7a68","#e8e0d0"],sz:1.2,
+   mv:[[1,"Scratch"],[1,"Leer"],[15,"Bite"],[23,"Slam"],[31,"Crunch"],[39,"Close Combat"]],
+   dex:"A shaggy sloth bear obsessed with mahua flowers and wild honey."},
+/*63*/{n:"Gainda",t:["Ground","Rock"],bs:[80,85,95,30,35],cr:110,xp:160,form:"quad",c:["#8a8a92","#c8c8d0","#6a5a48"],sz:1.2,
+   mv:[[1,"Tackle"],[1,"Harden"],[14,"Mud Shot"],[22,"Rock Throw"],[30,"Slam"],[38,"Rock Slide"]],evo:[42,64],
+   dex:"A one-horned calf of the eastern floodplains. Its hide is plated like armour."},
+/*64*/{n:"Kazirhino",t:["Ground","Rock"],bs:[110,115,120,35,45],cr:50,xp:220,form:"quad",c:["#6a6a72","#a8a8b0","#4a3a28"],sz:1.5,
+   mv:[[1,"Rock Throw"],[1,"Slam"],[44,"Rock Slide"],[50,"Earthquake"],[56,"Stone Edge"]],
+   dex:"A great one-horned rhino. Floodwaters part around it like it were an island."},
+/*65*/{n:"Meghnag",t:["Dragon","Flying"],bs:[85,95,75,100,105],cr:45,xp:220,form:"snake",c:["#5a6ad8","#c8d0f8","#e8c832"],sz:1.35,
+   mv:[[1,"Dragon Breath"],[1,"Wing Attack"],[40,"Dragon Pulse"],[46,"Air Slash"],[52,"Dragon Claw"],[58,"Hurricane"]],
+   dex:"A cloud serpent that swims through thunderheads, towing the monsoon behind it."},
+/*66*/{n:"Rangolil",t:["Fairy"],bs:[60,45,55,70,85],cr:130,xp:130,form:"fairy",c:["#e87ab0","#f8e0b0","#5cb84a"],sz:0.8,
+   mv:[[1,"Fairy Wind"],[1,"Growl"],[14,"Confusion"],[22,"Dazzling Gleam"],[30,"Psybeam"],[38,"Play Rough"]],
+   dex:"Born from a rangoli swept away too soon. It redraws itself each dawn in new colours."},
+/*67*/{n:"Simhark",t:["Fire","Normal"],bs:[90,100,75,85,70],cr:45,xp:210,form:"cat",c:["#d8a848","#f0d8a8","#8a4a1a"],sz:1.3,
+   mv:[[1,"Bite"],[1,"Flame Wheel"],[30,"Fire Fang"],[38,"Crunch"],[45,"Flamethrower"],[52,"Close Combat"]],
+   dex:"The last lions guard one western forest. Its mane holds the colour of sunset."},
+/*68*/{n:"Garjaraj",t:["Electric","Flying"],bs:[106,90,85,120,125],cr:3,xp:290,form:"bird",c:["#2a4ac8","#8ad0f8","#e8c832"],sz:1.6,legend:true,
+   mv:[[1,"Thunderbolt"],[1,"Air Slash"],[50,"Thunder Wave"],[55,"Hurricane"],[60,"Thunder"]],
+   dex:"The monsoon incarnate. When Garjaraj spreads its wings, dry rivers remember the rain."},
+/*69*/{n:"Dhuasur",t:["Fire","Poison"],bs:[100,115,90,80,120],cr:3,xp:290,form:"cloud",c:["#3a3a42","#7a7a82","#e04818"],sz:1.6,legend:true,
+   mv:[[1,"Sludge Bomb"],[1,"Flamethrower"],[50,"Toxic"],[55,"Eruption"],[60,"Smog"]],
+   dex:"An asura of ash and haze, born wherever the sky is sold. It eats the horizon."},
+/*70*/{n:"Shwetavya",t:["Ice","Psychic"],bs:[100,95,100,110,130],cr:3,xp:300,form:"cat",c:["#e8f0f8","#ffffff","#4a8ac8"],sz:1.5,legend:true,
+   mv:[[1,"Ice Beam"],[1,"Psychic"],[55,"Blizzard"],[60,"Recover"],[65,"Close Combat"]],
+   dex:"A white tiger seen once a century in the deepest snows. Silence follows it like a court."},
+];
+//////////////////// PROCEDURAL SPRITES ////////////////////
+// Each species draws from an archetype using its palette. GBA-ish chunky shapes.
+function drawMon(g,sp,x,y,size,back,frame){
+  const [c1,c2,c3]=sp.c, s=size*sp.sz;
+  const bob=Math.sin(frame*0.08)*2*s/40;
+  g.save(); g.translate(x,y+bob);
+  if(back) g.scale(-1,1);
+  g.scale(s/40,s/40); // design in 80x80 box, origin=center bottom-ish
+  const F=sp.form;
+  function e(cx,cy,rx,ry,col){ g.fillStyle=col; g.beginPath(); g.ellipse(cx,cy,rx,ry,0,0,7); g.fill(); }
+  function c(cx,cy,r,col){ e(cx,cy,r,r,col); }
+  function tri(ax,ay,bx,by,cx2,cy2,col){ g.fillStyle=col; g.beginPath(); g.moveTo(ax,ay); g.lineTo(bx,by); g.lineTo(cx2,cy2); g.closePath(); g.fill(); }
+  function eye(cx,cy){ c(cx,cy,4.5,"#fff"); c(cx+1.5,cy+0.5,2.4,"#1a1a1a"); }
+  switch(F){
+    case "bird":{
+      // tail fan
+      for(let i=-2;i<=2;i++){ e(-18+i*2,-34+Math.abs(i)*3,7,16,i%2?c3:c1); c(-18+i*2,-46+Math.abs(i)*3,3.2,c3); }
+      e(0,-20,17,20,c1);            // body
+      e(4,-16,10,13,c2);            // belly
+      c(10,-40,11,c1);              // head
+      tri(19,-42,30,-38,19,-35,"#e8a030"); // beak
+      eye(13,-42);
+      tri(6,-52,10,-62,14,-52,c3);  // crest
+      e(-2,-2,6,4,"#e8a030"); e(8,-2,6,4,"#e8a030"); // feet
+      e(2,-24,10,6,c3);             // wing
+      break;
+    }
+    case "cat":{
+      e(0,-16,20,15,c1);            // body
+      e(-16,-10,7,9,c1);            // haunch
+      c(14,-32,12,c1);              // head
+      e(15,-26,8,5,c2);             // muzzle
+      tri(6,-42,9,-52,13,-42,c1); tri(15,-42,19,-52,22,-42,c1); // ears
+      eye(17,-34);
+      // stripes
+      g.fillStyle=c3;
+      for(let i=0;i<3;i++) g.fillRect(-12+i*8,-27,3,10);
+      g.strokeStyle=c1; g.lineWidth=5; g.lineCap="round";
+      g.beginPath(); g.moveTo(-19,-14); g.quadraticCurveTo(-32,-22,-28,-34); g.stroke(); // tail
+      e(-10,-2,5,4,c2); e(2,-2,5,4,c2); e(12,-2,5,4,c2); // paws
+      c(17,-27,1.4,"#1a1a1a");
+      break;
+    }
+    case "croc":{
+      e(-2,-12,22,12,c1);           // body
+      e(0,-8,14,7,c2);              // belly
+      c(16,-24,10,c1);              // head
+      e(28,-22,12,4.5,c1);          // long snout
+      c(37,-24,3.5,c3);             // gharial bump
+      eye(17,-28);
+      // scutes
+      g.fillStyle=c3;
+      for(let i=0;i<4;i++) tri(-14+i*8,-22,-11+i*8,-28,-8+i*8,-22,c3);
+      g.strokeStyle=c1; g.lineWidth=6; g.lineCap="round";
+      g.beginPath(); g.moveTo(-22,-10); g.quadraticCurveTo(-34,-8,-38,-16); g.stroke(); // tail
+      e(-10,-2,5,3.5,c2); e(6,-2,5,3.5,c2);
+      break;
+    }
+    case "monkey":{
+      e(0,-18,14,16,c1);            // body
+      e(2,-14,9,10,c2);             // belly
+      c(2,-40,11,c1);               // head
+      e(2,-37,8,7,c2);              // face
+      eye(-1,-39); eye(6,-39);
+      c(-9,-42,4,c1); c(13,-42,4,c1); // ears
+      g.strokeStyle=c1; g.lineWidth=4.5; g.lineCap="round";
+      g.beginPath(); g.moveTo(-13,-16); g.quadraticCurveTo(-28,-26,-22,-44); g.stroke(); // tail
+      g.beginPath(); g.moveTo(-10,-24); g.lineTo(-18,-12); g.stroke();
+      g.beginPath(); g.moveTo(12,-24); g.lineTo(18,-12); g.stroke();
+      e(-6,-2,5,4,c1); e(8,-2,5,4,c1);
+      break;
+    }
+    case "dog":{
+      e(0,-15,18,13,c1);
+      e(3,-11,11,7,c2);
+      c(15,-30,10,c1);
+      e(21,-26,7,4.5,c2);           // snout
+      c(25,-27,2,"#1a1a1a");
+      tri(8,-38,10,-48,15,-37,c1); tri(17,-38,22,-47,23,-36,c1);
+      eye(16,-32);
+      g.strokeStyle=c1; g.lineWidth=5; g.lineCap="round";
+      g.beginPath(); g.moveTo(-17,-16); g.quadraticCurveTo(-26,-28,-20,-34); g.stroke();
+      e(-10,-2,4.5,4,c1); e(0,-2,4.5,4,c1); e(10,-2,4.5,4,c1);
+      break;
+    }
+    case "snake":{
+      g.strokeStyle=c1; g.lineWidth=11; g.lineCap="round";
+      g.beginPath(); g.moveTo(-24,-4); g.quadraticCurveTo(-6,-14,2,-6); g.quadraticCurveTo(10,2,14,-14); g.stroke();
+      e(14,-30,10,14,c1);           // raised hood
+      e(14,-30,6,10,c2);
+      c(14,-42,8,c1);               // head
+      eye(17,-43);
+      g.fillStyle=c3; c(14,-30,3,c3); // hood mark
+      tri(20,-44,27,-42,20,-40,"#c04838"); // tongue
+      break;
+    }
+    case "elephant":{
+      e(0,-18,22,17,c1);            // body
+      c(14,-34,13,c1);              // head
+      e(2,-34,8,10,c1); e(26,-34,8,10,c1); // ears
+      g.strokeStyle=c1; g.lineWidth=7; g.lineCap="round";
+      g.beginPath(); g.moveTo(22,-30); g.quadraticCurveTo(30,-18,26,-8); g.stroke(); // trunk
+      eye(12,-36);
+      g.fillStyle=c3; e(14,-44,9,3,c3); // painted headpiece
+      e(-12,-3,6,5,c2); e(0,-3,6,5,c2); e(12,-3,6,5,c2);
+      c(20,-26,2.5,"#f0f0e8");      // tusk hint
+      break;
+    }
+    case "fish":{
+      e(0,-20,18,11,c1);
+      e(4,-18,10,6,c2);
+      tri(-16,-20,-30,-30,-30,-10,c1); // tail
+      tri(0,-30,6,-40,12,-30,c3);   // dorsal
+      eye(11,-22);
+      e(2,-12,6,3,c3);              // fin
+      // ripples
+      g.strokeStyle="rgba(120,170,220,.5)"; g.lineWidth=2;
+      g.beginPath(); g.ellipse(0,-2,20,4,0,0,7); g.stroke();
+      break;
+    }
+    case "crab":{
+      e(0,-14,17,12,c1);
+      e(0,-11,11,7,c2);
+      eye(-5,-22); eye(5,-22);
+      g.strokeStyle=c1; g.lineWidth=4;
+      for(let i=0;i<3;i++){
+        g.beginPath(); g.moveTo(-14,-14+i*4); g.lineTo(-24,-8+i*5); g.stroke();
+        g.beginPath(); g.moveTo(14,-14+i*4); g.lineTo(24,-8+i*5); g.stroke();
+      }
+      c(-20,-24,6,c1); c(20,-24,6,c1); // claws
+      tri(-24,-27,-16,-24,-24,-20,c2); tri(24,-27,16,-24,24,-20,c2);
+      break;
+    }
+    case "plant":{
+      e(0,-10,13,8,c2);             // pad/pot
+      g.strokeStyle=c2; g.lineWidth=4; g.beginPath(); g.moveTo(0,-12); g.lineTo(0,-26); g.stroke();
+      for(let i=0;i<6;i++){ const a=i*Math.PI/3+0.5; e(Math.cos(a)*10,-32+Math.sin(a)*7,7,4.5,c1); } // petals/leaves
+      c(0,-32,7,c3);                // center
+      eye(-3,-32); eye(3,-32);
+      e(-11,-8,6,3,c1); e(11,-8,6,3,c1);
+      break;
+    }
+    case "tree":{
+      g.fillStyle=c2; g.fillRect(-5,-26,10,24); // trunk
+      g.strokeStyle=c2; g.lineWidth=3;
+      g.beginPath(); g.moveTo(-8,-20); g.lineTo(-8,-2); g.stroke(); // hanging roots
+      g.beginPath(); g.moveTo(9,-16); g.lineTo(9,-2); g.stroke();
+      c(0,-40,17,c1); c(-13,-34,11,c1); c(13,-34,11,c1); // canopy
+      eye(-5,-30); eye(5,-30);
+      g.fillStyle=c3; e(0,-24,5,3,c3); // mouth-ish knot
+      break;
+    }
+    case "mouse":{
+      e(0,-14,14,12,c1);
+      e(2,-11,9,7,c2);
+      c(8,-28,9,c1);
+      c(1,-36,4.5,c1); c(15,-36,4.5,c1); // ears
+      eye(10,-29);
+      g.fillStyle=c3; g.fillRect(-9,-22,3,10); g.fillRect(-3,-24,3,12); // stripes
+      g.strokeStyle=c1; g.lineWidth=3.5; g.lineCap="round";
+      g.beginPath(); g.moveTo(-13,-10); g.quadraticCurveTo(-24,-14,-22,-26); g.stroke();
+      break;
+    }
+    case "machine":{ // auto-rickshaw spirit
+      e(0,-16,19,14,c1);            // cab
+      g.fillStyle=c2; g.fillRect(-14,-30,28,9); // canopy
+      e(-2,-18,9,7,"#c8e8f0");      // windshield
+      eye(-4,-18); eye(3,-18);
+      c(-12,-4,6,"#2a2a2a"); c(12,-4,6,"#2a2a2a"); c(-12,-4,2.5,c3); c(12,-4,2.5,c3); // wheels
+      c(17,-24,3,"#f8e050");        // headlamp
+      g.strokeStyle=c3; g.lineWidth=2.5; g.beginPath(); g.moveTo(0,-30); g.lineTo(0,-38); g.stroke(); c(0,-39,2.5,c3); // antenna spark
+      break;
+    }
+    case "fairy":{
+      e(0,-18,11,14,c1);            // flowing dress
+      tri(-11,-6,11,-6,0,-24,c1);
+      c(0,-36,9,c2);                // head
+      eye(-3,-36); eye(3,-36);
+      g.fillStyle=c3; e(0,-45,7,3,c3); // headdress
+      g.strokeStyle=c2; g.lineWidth=3.5; g.lineCap="round";
+      g.beginPath(); g.moveTo(-9,-24); g.quadraticCurveTo(-20,-30,-16,-38); g.stroke(); // mudra arms
+      g.beginPath(); g.moveTo(9,-24); g.quadraticCurveTo(20,-30,16,-38); g.stroke();
+      c(-16,-39,3,c3); c(16,-39,3,c3);
+      break;
+    }
+    case "fighter":{
+      e(0,-22,15,17,c1);            // torso
+      e(0,-16,10,9,c2);
+      c(0,-44,10,c2);               // head
+      eye(-3,-44); eye(4,-44);
+      g.fillStyle=c3; e(0,-52,9,3.5,c3); // headband/pagdi
+      g.strokeStyle=c2; g.lineWidth=6; g.lineCap="round";
+      g.beginPath(); g.moveTo(-13,-30); g.lineTo(-22,-40); g.stroke(); // raised arms
+      g.beginPath(); g.moveTo(13,-30); g.lineTo(22,-40); g.stroke();
+      c(-23,-41,4.5,c2); c(23,-41,4.5,c2);
+      g.fillStyle=c3; g.fillRect(-13,-10,10,9); g.fillRect(3,-10,10,9); // shorts/legs
+      e(-8,-1,6,3.5,c2); e(8,-1,6,3.5,c2);
+      break;
+    }
+    case "golem":{
+      e(0,-16,17,14,c1);            // boulder body
+      c(0,-34,11,c1);
+      eye(-4,-34); eye(4,-34);
+      g.fillStyle=c3;
+      g.fillRect(-12,-20,7,5); g.fillRect(5,-14,8,5); g.fillRect(-4,-10,7,4); // carvings
+      e(-16,-22,6,8,c2); e(16,-22,6,8,c2); // arms
+      e(-9,-2,7,4,c2); e(9,-2,7,4,c2);
+      g.fillStyle=c2; e(0,-44,7,2.5,c2); // carved crown
+      break;
+    }
+    case "bear":{
+      e(0,-18,20,17,c1);
+      e(2,-13,12,9,c2);
+      c(12,-36,11,c1);
+      e(18,-32,7,4.5,c2);
+      c(22,-33,2,"#1a1a1a");
+      c(5,-45,4.5,c1); c(17,-46,4.5,c1);
+      eye(13,-38);
+      g.fillStyle=c3; e(2,-24,7,4,c3); // chest V mark
+      e(-11,-2,6,5,c1); e(1,-2,6,5,c1); e(12,-2,6,5,c1);
+      break;
+    }
+    case "weasel":{
+      e(0,-13,17,10,c1);
+      e(3,-10,10,6,c2);
+      c(14,-26,8.5,c1);
+      tri(9,-33,11,-40,14,-32,c1); tri(16,-33,20,-40,21,-32,c1);
+      eye(16,-28);
+      g.strokeStyle=c1; g.lineWidth=5; g.lineCap="round";
+      g.beginPath(); g.moveTo(-16,-12); g.quadraticCurveTo(-30,-16,-28,-28); g.stroke();
+      e(-8,-2,4.5,3.5,c2); e(6,-2,4.5,3.5,c2);
+      break;
+    }
+    case "fox":{
+      e(0,-14,16,11,c1);
+      e(3,-10,9,6,c2);
+      c(13,-28,9,c1);
+      tri(5,-34,7,-48,12,-33,c1); tri(15,-34,21,-48,22,-33,c1); // huge ears
+      tri(6,-46,7,-42,11,-42,c2); tri(19,-46,17,-42,21,-42,c2);
+      eye(15,-29);
+      e(19,-25,5,3,c2); c(23,-26,1.6,"#1a1a1a");
+      g.strokeStyle=c1; g.lineWidth=6; g.lineCap="round";
+      g.beginPath(); g.moveTo(-15,-12); g.quadraticCurveTo(-28,-14,-27,-24); g.stroke();
+      c(-28,-25,4.5,c2);
+      break;
+    }
+    case "bug":{
+      e(0,-12,15,10,c1);            // abdomen
+      e(11,-18,9,7,c1);             // thorax
+      c(18,-26,7,c1);               // head
+      eye(20,-28);
+      g.strokeStyle=c3; g.lineWidth=3;
+      for(let i=0;i<3;i++){ g.beginPath(); g.moveTo(-4+i*8,-10); g.lineTo(-8+i*8,-1); g.stroke(); }
+      g.fillStyle=c2; e(-2,-14,9,5,c2); // shell pattern
+      // scorpion tail
+      g.strokeStyle=c1; g.lineWidth=4.5; g.lineCap="round";
+      g.beginPath(); g.moveTo(-14,-14); g.quadraticCurveTo(-24,-26,-16,-34); g.stroke();
+      c(-15,-35,3.5,c3);
+      g.beginPath(); g.moveTo(22,-32); g.lineTo(26,-38); g.stroke(); // antenna
+      break;
+    }
+    case "moth":{
+      e(-10,-26,12,8,c1); e(10,-26,12,8,c1);   // upper wings
+      e(-8,-16,9,6,c2); e(8,-16,9,6,c2);       // lower wings
+      e(0,-20,5,12,c3);             // body
+      c(0,-33,5,c3);
+      eye(-2,-34); eye(2,-34);
+      c(-8,-26,3,c2); c(8,-26,3,c2); // wing spots
+      g.strokeStyle=c3; g.lineWidth=2;
+      g.beginPath(); g.moveTo(-2,-38); g.lineTo(-6,-44); g.stroke();
+      g.beginPath(); g.moveTo(2,-38); g.lineTo(6,-44); g.stroke();
+      break;
+    }
+    case "ghost":{
+      g.globalAlpha=0.92;
+      e(0,-22,14,17,c1);            // wisp body
+      // wavy bottom
+      for(let i=-2;i<=2;i++) c(i*6,-7+Math.abs(i)*2,4.5,c1);
+      e(0,-26,8,9,c2);              // inner glow
+      eye(-4,-26); eye(4,-26);
+      c(0,-40,5,c3);                // flame/knot on top
+      tri(-3,-42,0,-52,3,-42,c3);
+      g.globalAlpha=1;
+      break;
+    }
+    case "cloud":{
+      g.globalAlpha=0.95;
+      c(-10,-20,12,c1); c(4,-26,14,c1); c(14,-16,11,c1); c(-2,-12,12,c1);
+      c(2,-22,8,c2);
+      // burning eyes
+      c(-4,-24,4,c3); c(8,-24,4,c3);
+      c(-4,-24,1.8,"#f8e050"); c(8,-24,1.8,"#f8e050");
+      // drips of soot
+      c(-8,-4,3,c1); c(6,-2,2.5,c1);
+      g.globalAlpha=1;
+      break;
+    }
+    default: { e(0,-18,16,14,c1); e(2,-14,10,9,c2); eye(-4,-22); eye(5,-22); }
+  }
+  g.restore();
+}
+</script>
+<script>
+"use strict";
+//////////////////// WORLD MAPS ////////////////////
+// Legend: walk . : , _ S i d ~ G(bush) B(bridge)  | block T p W M # F R s ^ H !
+// doors: C=center m=mart Y=gym D=story door   exits: rect list
+const PAL={
+  kerala:{gr:"#63b84f",gr2:"#58aa46",path:"#d8c078",water:"#3f86c8",tree:"#2f7a35",treeT:"#45a04c",roof:"#c05838",wall:"#e8dcc0",fence:"#a87848",tall:"#3f9e3f",flower:"#e86a98",rock:"#8a8a78"},
+  ghats:{gr:"#4f9e46",gr2:"#459038",path:"#c0a868",water:"#3f7ab8",tree:"#1f5f28",treeT:"#337a3a",roof:"#8a5838",wall:"#d8ccb0",fence:"#987848",tall:"#2f8a35",flower:"#d85a88",rock:"#7a7a68"},
+  city:{gr:"#7ab860",gr2:"#70b056",path:"#c8c8c0",water:"#3f86c8",tree:"#3f8a40",treeT:"#55a856",roof:"#6878a8",wall:"#e0e0e8",fence:"#8a8a98",tall:"#55a04f",flower:"#e8b040",rock:"#8a8a90"},
+  beach:{gr:"#8ec868",gr2:"#84be5e",path:"#e8d8a0",water:"#38a8d8",tree:"#3f9e4f",treeT:"#58bc60",roof:"#e88a48",wall:"#f8f0d8",fence:"#c8a878",tall:"#6ab858",flower:"#e86a98",rock:"#b8a888"},
+  desert:{gr:"#e0c078",gr2:"#d8b870",path:"#c8a058",water:"#48a0c8",tree:"#8a9e48",treeT:"#a8b858",roof:"#b06838",wall:"#e8d0a0",fence:"#a88848",tall:"#c8b068",flower:"#e8a040",rock:"#b89868"},
+  river:{gr:"#74b058",gr2:"#6aa84e",path:"#d0b880",water:"#4888b8",tree:"#38803a",treeT:"#4f9e50",roof:"#c8843a",wall:"#e8d8b8",fence:"#a08050",tall:"#4f9846",flower:"#e8843a",rock:"#8a8878"},
+  hills:{gr:"#4fa858",gr2:"#46a050",path:"#c0a870",water:"#3f86c8",tree:"#2a7a3a",treeT:"#3f9e4c",roof:"#5878a8",wall:"#e8e4d8",fence:"#98a888",tall:"#3f9e46",flower:"#e8e0f8",rock:"#8a9088"},
+  snow:{gr:"#e8f0f8",gr2:"#dce8f4",path:"#c8d4e0",water:"#7ab8d8",tree:"#3a6a58",treeT:"#4f8a70",roof:"#7888b8",wall:"#f0f0f8",fence:"#a8b8c8",tall:"#c8d8e8",flower:"#b8d0f0",rock:"#98a8b8"},
+  cave:{gr:"#585068",gr2:"#4f4860",path:"#6a6078",water:"#3a5888",tree:"#3a3448",treeT:"#4a4458",roof:"#5a5a6a",wall:"#3a3448",fence:"#5a5468",tall:"#4f4860",flower:"#8a7ab8",rock:"#7a7288"},
+  factory:{gr:"#787878",gr2:"#707070",path:"#909090",water:"#5a6a4a",tree:"#4a5a4a",treeT:"#5a6a5a",roof:"#a84838",wall:"#686870",fence:"#585860",tall:"#686860",flower:"#a8a040",rock:"#8a8a8a"},
+  league:{gr:"#88c8a0",gr2:"#7ec096",path:"#e8e0c8",water:"#48a0c8",tree:"#2f8a4f",treeT:"#45a862",roof:"#c8a030",wall:"#f8f4e8",fence:"#b8a878",tall:"#68b880",flower:"#e8c850",rock:"#98a898"},
+};
+const MAPS={};
+function M_(id,name,pal,music,rows,cfg){
+  MAPS[id]=Object.assign({id,name,pal,music,rows,w:rows[0].length,h:rows.length,
+    exits:[],npcs:[],trainers:[],signs:{},wild:null,blocks:[]},cfg||{});
+}
+//---------------- NARIYALPUR (start, Kerala backwater village) ----------------
+M_("nariyalpur","Nariyalpur Village","kerala","town",[
+"TTTTTTTTTTEETTTTTTTTTT",
+"TppWWWWp....~..pWWWppT",
+"Tp.WWW....HH....WWW.pT",
+"T....~....HH...~.....T",
+"T..HH......D...HH...pT",
+"T..HH..~........HH...T",
+"Tp..........~........T",
+"T...~..C......m......T",
+"T....................T",
+"Tp.HH.....!....HH..p.T",
+"T..HH..~.......HH....T",
+"T......~..~..........T",
+"TpWWWW..........WWWppT",
+"TTTTTTTTTTTTTTTTTTTTTT"],
+{exits:[{x:10,y:0,w:2,h:1,to:"route1",tx:6,ty:38}],
+ doorD:{kind:"lab"},
+ signs:{"9,9":"NARIYALPUR VILLAGE — Where the palms hum and the backwaters sleep."},
+ npcs:[
+  {x:5,y:7,d:2,name:"Amma",text:["Fresh banana chips, beta?","Take care in the tall grass — wild Pokémon nest there."]},
+  {x:13,y:9,d:3,name:"Fisherman",text:["My Rohufin pulls the whole boat home.","They say a storm bird sleeps beyond the Himalaya..."]},
+  {x:8,y:4,d:2,name:"Kid",text:["Prof. Neem studies Pokémon in that lab with the big door!","She came back from the mainland with THREE rare ones!"]},
+ ]});
+//---------------- ROUTE 1 (palm-lined coastal road, north) ----------------
+M_("route1","Route 1","kerala","route",[
+"TTTTTTEETTTTTT",
+"T....G..G....T",
+"T.GG.G..G.GG.T",
+"T.GG......GG.T",
+"Tp...~..~...pT",
+"T..GGG..GGG..T",
+"T..GGG..GGG..T",
+"T............T",
+"TpWWW....WWWpT",
+"TpWWW.!..WWWpT",
+"T............T",
+"T.GG...~.GG..T",
+"T.GG.GG..GG.pT",
+"T....GG......T",
+"Tp...GG...~..T",
+"T..~......p..T",
+"T.GGG..GGG...T",
+"T.GGG..GGG...T",
+"T............T",
+"TpWW......WWpT",
+"TpWW..~...WWpT",
+"T............T",
+"T..GG..GG....T",
+"T..GG..GG.~..T",
+"Tp...........T",
+"T...GGG...GG.T",
+"T.~.GGG...GG.T",
+"T............T",
+"T.p...WWWW..pT",
+"T.....WWWW...T",
+"T..GG........T",
+"T..GG..~.GG..T",
+"T......p.GG..T",
+"T.GG.........T",
+"T.GG...GG....T",
+"T......GG..~.T",
+"Tp...........T",
+"T.....p......T",
+"T......TTTTTTT",
+"TTTTTTEETTTTTT"],
+{exits:[{x:6,y:0,w:2,h:1,to:"malabar",tx:11,ty:14},{x:6,y:39,w:2,h:1,to:"nariyalpur",tx:10,ty:1}],
+ signs:{"6,9":"ROUTE 1 — North: Malabar Town. Mind the coconuts."},
+ wild:{rate:0.14,pool:[[9,2,4,25],[11,2,4,20],[13,2,4,25],[15,2,4,20],[24,2,4,10]]},
+ trainers:[
+  {x:4,y:15,d:1,los:4,name:"Lass Anju",team:[[13,4],[11,4]],money:120,pre:["My Keedler ate all my murukku... but it got stronger!"],post:["Full and strong. Like me after lunch."]},
+  {x:10,y:25,d:3,los:4,name:"Youngster Biju",team:[[15,5]],money:150,pre:["Deshdog and I run this route every morning!"],post:["We need a new training route..."]},
+ ]});
+//---------------- MALABAR TOWN (gym 1, spice port) ----------------
+M_("malabar","Malabar Town","kerala","town",[
+"TTTTTTTTTTTTTTTTEETTTT",
+"TpWWWWWW.............T",
+"Tp.WWWW...HH..HH..~..T",
+"T..........HH..HH....T",
+"T..!.................T",
+"T.....HH....YY....~..T",
+"T.HH..HH....YY.......T",
+"T.HH.........,.......T",
+"T........~..,,...HH..T",
+"T..C...m.....,...HH..T",
+"T............,.......T",
+"T~....HH.....,....~..T",
+"T.....HH..........p..T",
+"T....................T",
+"TTTTTTTTTTTEETTTTTTTTT"],
+{exits:[{x:16,y:0,w:2,h:1,to:"route2",tx:1,ty:6},{x:11,y:14,w:2,h:1,to:"route1",tx:6,ty:1}],
+ gym:0,
+ signs:{"3,4":"MALABAR TOWN — The scent of cardamom rides the sea breeze."},
+ npcs:[
+  {x:9,y:8,d:2,name:"Spice Trader",text:["Pepper, cardamom, cloves! The Ghats grow everything.","Gym Leader Meera grows her Pokémon the same way — with patience."]},
+  {x:18,y:3,d:3,name:"Old Sailor",text:["North-east through the Ghats lies Yantra City.","The ranger won't let you through without Meera's badge."]},
+ ]});
+//---------------- ROUTE 2 (Western Ghats climb, eastward) ----------------
+M_("route2","Route 2 — Ghat Road","ghats","route",[
+"TTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT",
+"T........MMM.....GGG......MMMM.....T",
+"T..GG....MMM.....GGG..~...MMMM.GG..T",
+"E..GG........GG..........~.....GG..T",
+"E....~..!....GG....GGG.............E",
+"E............GG....GGG..GG......~..E",
+"T..MMM..............~...GG..MMM....E",
+"T..MMM....GGG..............MMM.....T",
+"T..MMM....GGG...MMMM..GG...........T",
+"T.....~...GGG...MMMM..GG....GG..~..T",
+"T..GG............~..........GG.....T",
+"TTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT"],
+{exits:[{x:0,y:3,w:1,h:3,to:"malabar",tx:16,ty:1},{x:35,y:4,w:1,h:3,to:"ghatwoods",tx:1,ty:8}],
+ signs:{"8,4":"ROUTE 2 — GHAT ROAD. Hairpin bends ahead. Honk... er, call out."},
+ wild:{rate:0.14,pool:[[9,5,8,20],[13,5,7,15],[14,12,13,5],[18,5,8,20],[30,5,8,20],[11,5,8,15],[62,7,9,5]]},
+ blocks:[{x:2,y:4,flagNot:"badge0",who:"Ranger",text:["The Ghat Road is closed until you've proven yourself.","Come back with the Spice Badge from Meera's gym."]}],
+ trainers:[
+  {x:12,y:6,d:3,los:4,name:"Hiker Gopal",team:[[39,7],[9,7]],money:280,pre:["These hills gave me legs of iron and a Pattharo of stone!"],post:["Rest at the top. The view is worth every step."]},
+  {x:26,y:5,d:2,los:4,name:"Picker Leela",team:[[30,8]],money:240,pre:["My Chaipat picks only the tenderest leaves."],post:["Have a cup of chai before the woods!"]},
+ ]});
+//---------------- GHAT WOODS (forest) ----------------
+M_("ghatwoods","Ghat Woods","ghats","cave",[
+"TTTTTTTTTTTTTTTTTTTTTTTTTT",
+"T.GGG..T..GGGG..T...GGG..T",
+"T.GGG..T..GGGG..T...GGG..T",
+"T......T....T...T........T",
+"T..T...TTT..T...TTT..T...T",
+"T..T........T........T..GT",
+"T..TTTT..T..T..T..TTTT..GT",
+"E........T.....T.........E",
+"E..GG....TTTT..T..GG.....E",
+"T..GG..!....T.....GG..T..T",
+"T......TT...T..TT.....T..T",
+"T..GGG..T......T..GGG....T",
+"T..GGG..T..GG..T..GGG.T..T",
+"T.........GG.............T",
+"TTTTTTTTTTTTTTTTTTTTTTTTTT"],
+{exits:[{x:0,y:7,w:1,h:2,to:"route2",tx:34,ty:5},{x:25,y:7,w:1,h:2,to:"yantra",tx:1,ty:11}],
+ signs:{"7,9":"GHAT WOODS — Home of the swaying king cobra. Walk loudly."},
+ wild:{rate:0.16,pool:[[13,6,8,20],[14,13,15,8],[18,6,9,20],[9,6,9,15],[32,7,9,12],[30,6,8,15],[62,8,10,5],[10,24,26,2]]},
+ trainers:[
+  {x:10,y:5,d:2,los:3,name:"Bug Kid Chotu",team:[[13,7],[13,7],[14,13]],money:200,pre:["My Keedler army will— hey, don't step on them!"],post:["They tried their best, okay?!"]},
+  {x:18,y:12,d:0,los:4,name:"Charmer Bala",team:[[18,9],[18,10]],money:320,pre:["My been flute commands the naags of this wood!"],post:["The flute... needs new reeds."]},
+ ]});
+//---------------- YANTRA CITY (gym 2 electric, tech hub) ----------------
+M_("yantra","Yantra City","city","city",[
+"TTTTTTTTTTTTTTTTTTTTTTTT",
+"T,,,,,,,,,,,,,,,,,,,,,,T",
+"T,HH..HH,,,HH..HH..HH,,T",
+"T,HH..HH,,,HH..HH..HH,,T",
+"T,,,,,,,,,,,,,,,,,,,,,,T",
+"T,,HH,,,,DD,,,,,YY,,,,,T",
+"T,,HH,,,,DD,,,,,YY,,~,,T",
+"T,,,,,,,,,,,,,,,,,,,,,,T",
+"T,C,,,m,,,,!,,,,,,HH,,,T",
+"T,,,,,,,,,,,,,,,,,HH,,,T",
+"E,,,,,,,,,,,,,,,,,,,,,,T",
+"E,,HH,,HH,,,,HH,,,,,,,,E",
+"T,,HH,,HH,~,,HH,,~,,,,,E",
+"T,,,,,,,,,,,,,,,,,,,,,,T",
+"TTTTTTTTTTTTTTTTTTTTTTTT"],
+{exits:[{x:0,y:10,w:1,h:2,to:"ghatwoods",tx:24,ty:8},{x:23,y:11,w:1,h:2,to:"route3",tx:1,ty:6}],
+ gym:1, doorD:{kind:"tech"},
+ signs:{"11,8":"YANTRA CITY — India's circuit board. Software, silicon & Pokémon."},
+ npcs:[
+  {x:6,y:4,d:2,name:"Engineer",text:["Our lab digitises Pokémon data for the whole region.","Lately some rough types in grey have been snooping around..."]},
+  {x:16,y:9,d:3,name:"Startup Founder",text:["My app matches trainers with lost Pokémon. Series A soon!","Gym Leader Arjun wired the whole gym himself."]},
+ ]});
+//---------------- ROUTE 3 (west to the coast) ----------------
+M_("route3","Route 3","beach","route",[
+"TTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT",
+"T....GG....~....GGG.......GG.......T",
+"T....GG.........GGG..GG...GG...GG..T",
+"T..~......GG.........GG........GG..T",
+"E..........GG..!..........~........E",
+"E....GGG...GG........GGG...........E",
+"E....GGG.......GG....GGG......GG...E",
+"T..............GG.............GG...T",
+"T...GG...~........GG........~......T",
+"T...GG............GG..GGG..........T",
+"T............~........GGG......~...T",
+"TTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT"],
+{exits:[{x:0,y:4,w:1,h:3,to:"yantra",tx:22,ty:11},{x:35,y:4,w:1,h:3,to:"sonabeach",tx:20,ty:6}],
+ signs:{"15,4":"ROUTE 3 — West: Sona Beach. Sunscreen recommended."},
+ wild:{rate:0.13,pool:[[15,10,13,20],[11,10,13,20],[34,10,13,15],[9,10,13,15],[20,10,13,15],[36,12,14,5],[66,12,14,5]]},
+ blocks:[{x:2,y:5,flagNot:"badge1",who:"Officer",text:["Road to the coast is under repair.","With Arjun's Circuit Badge I'd know you can handle yourself. Go earn it!"]}],
+ trainers:[
+  {x:13,y:3,d:2,los:4,name:"Rickshawala Raju",team:[[34,11],[15,11]],money:380,pre:["Fastest rickshaw in the south! My Bijlu charges the battery!"],post:["Okay, okay, meter down. You win."]},
+  {x:24,y:8,d:0,los:4,name:"Tourist Priya",team:[[27,12]],money:400,pre:["I came for the beaches, stayed for the Pokémon!"],post:["Time for another vacation photo."]},
+ ]});
+//---------------- SONA BEACH (gym 3 water, Goa vibes) ----------------
+M_("sonabeach","Sona Beach","beach","beach",[
+"TTTTTTTTTTTTTTTTTTTTTTTT",
+"TWWWWWWWWWWWWWWWWWWWWWWT",
+"TWWWWWWWWWWWWWWWWWWWWWWT",
+"TSSSSSSSSSSSSSSSSSSSSSST",
+"TSSSSSSSSSSSSSSSSSSSSSST",
+"TSS..p..SS..p...SSSp..ST",
+"TS....SSSSS...SSSS.....E",
+"TS.HH.......YY.....HH.SE",
+"TS.HH..~....YY.....HH.ST",
+"TS.....................T",
+"TS..C.....m.....!....pST",
+"TS.....~..........~...ST",
+"TSSp.......p........pSST",
+"TTTTTTTTTTTTTTTTTTTTTTTT"],
+{exits:[{x:23,y:6,w:1,h:2,to:"route3",tx:34,ty:5},{x:23,y:7,w:1,h:1,to:"route4",tx:1,ty:16,cond:"badge2"}],
+ gym:2,
+ signs:{"16,10":"SONA BEACH — Golden sand, silver waves, platinum sunsets."},
+ npcs:[
+  {x:6,y:9,d:2,name:"Shack Owner",text:["Fish thali? Solkadhi? My Kekdaa helps in the kitchen. Ethically!","Some goons in grey dumped a truckload of plastic at the north cove..."]},
+  {x:14,y:11,d:3,name:"Lifeguard",text:["Gym Leader Zoya swims to the lighthouse and back. Daily.","North exit leads to Mahanagar — once you're strong enough."]},
+ ]});
+//---------------- ROUTE 4 (coastal highway north) ----------------
+M_("route4","Route 4 — Konkan Way","beach","route",[
+"TTTTTTTTTTTTTT",
+"T....GG..GG..T",
+"T.~..GG..GG..T",
+"T............T",
+"TWWW....WWWWTT",
+"TWWW.!..WWWWTT",
+"T............T",
+"T..GG...GG...T",
+"T..GG...GG.~.T",
+"T....GGG.....T",
+"T.p..GGG..p..T",
+"T............T",
+"TWWWW....WWWTT",
+"TWWWW.~..WWWTT",
+"T............T",
+"T..GG..GG....T",
+"E..GG..GG..~.T",
+"E......p.....T",
+"T...~........T",
+"T.GG....GG...T",
+"T.GG....GG...T",
+"T............T",
+"TTTTTTEETTTTTT"],
+{exits:[{x:0,y:16,w:1,h:2,to:"sonabeach",tx:22,ty:7},{x:6,y:21,w:2,h:1,to:"mahanagar",tx:11,ty:1,flip:true}],
+ signs:{"5,5":"ROUTE 4 — KONKAN WAY. The sea keeps you company all the way north."},
+ wild:{rate:0.13,pool:[[24,14,17,20],[26,14,17,15],[27,14,17,15],[15,14,17,15],[49,15,17,10],[20,14,16,15],[28,14,17,10]]},
+ blocks:[{x:2,y:17,flagNot:"dhuan_beach",who:"Fisherwoman",text:["The cove ahead is choked with plastic — some Team Dhuan lot dumped it.","Sort them out at the beach first, will you? Zoya's already furious."]}],
+ trainers:[
+  {x:8,y:3,d:2,los:4,name:"Sailor Dominic",team:[[24,15],[26,16]],money:520,pre:["From Kochi to Mumbai I've sailed! Fight me, landlubber!"],post:["You'd survive a monsoon crossing, I reckon."]},
+  {x:5,y:10,d:3,los:4,name:"Trader Meena",team:[[17,16],[15,16]],money:540,pre:["Cashews! Kokum! And a cow that fights!"],post:["Gomata forgives you. So do I."]},
+ ]});
+//---------------- MAHANAGAR CITY (gym 4 fighting, Mumbai-like) ----------------
+M_("mahanagar","Mahanagar City","city","city",[
+"TTTTTTTTTTEETTTTTTTTTTTT",
+"T,,,,,,,,,__,,,,,,,,,,,T",
+"T,HH.HH,,,__,,,HH..HH,,T",
+"T,HH.HH,,,__,,,HH..HH,,T",
+"T,,,,,,,,,__,,,,,,,,,,,T",
+"T,HH,,,,,,__,,,,,,DD,,,T",
+"T,HH,~,,,,__,,,,,,DD,,,T",
+"T,,,,,,,,,__,,,,,,,,,,,T",
+"T,,,,YY,,,__,,!,,,,,,,,T",
+"T,,,,YY,,,__,,,,,HH,,,,T",
+"T,C,,,,,,,__,,m,,HH,,~,T",
+"T,,,,,,,,,__,,,,,,,,,,,T",
+"E,,HH,HH,,__,,HH,HH,,,,T",
+"E,,HH,HH,,__,,HH,HH,,,,T",
+"T,,,,,,,,,__,,,,,,,,,,,T",
+"TWWWWWWWW,__,WWWWWWWWWWT",
+"TWWWWWWWW,BB,WWWWWWWWWWT",
+"TTTTTTTTTTEETTTTTTTTTTTT"],
+{exits:[{x:10,y:0,w:2,h:1,to:"route5",tx:6,ty:20},{x:0,y:12,w:1,h:2,to:"route4",tx:6,ty:20},{x:10,y:17,w:2,h:1,to:"route4",tx:6,ty:1}],
+ gym:3, doorD:{kind:"hq"},
+ signs:{"14,8":"MAHANAGAR — The city that never blinks. Local trains every 3 minutes."},
+ npcs:[
+  {x:6,y:6,d:2,name:"Dabbawala",text:["Four lakh lunchboxes a day, zero mistakes.","Gym Leader Vikram trains at the akhada by the sea. Iron man!"]},
+  {x:20,y:10,d:3,name:"Film Extra",text:["I've been in 43 films! Mostly as 'man in crowd'.","See that grey building? Dhuan Works, they call it. Bad air around it."]},
+  {x:14,y:4,d:2,name:"Chaiwala",text:["Cutting chai, ek dum garam!","Team Dhuan says smog is 'the smell of progress'. My lungs disagree."]},
+ ]});
+//---------------- ROUTE 5 (north into the Thar) ----------------
+M_("route5","Route 5 — Aravalli Path","desert","route",[
+"TTTTTTEETTTTTT",
+"TssS......Sss T".replace(/ /g,"T"),
+"Ts..GG..GG..sT",
+"T...GG..GG...T",
+"TS...~....~.ST",
+"T..R......R..T",
+"T....SSSS....T",
+"TS..SSSSSS..ST",
+"T....!.......T",
+"Ts...........T",
+"T..GG...GG..sT",
+"T..GG...GG...T",
+"TS....p.....ST",
+"T~...........T",
+"Ts.R.....R..sT",
+"T....SSS.....T",
+"TS..SSSSS...ST",
+"T............T",
+"Ts..GG..GG..sT",
+"T...GG..GG...T",
+"T......s.....T",
+"TTTTTTEETTTTTT"],
+{exits:[{x:6,y:0,w:2,h:1,to:"thardesert",tx:3,ty:16},{x:6,y:21,w:2,h:1,to:"mahanagar",tx:10,ty:1}],
+ signs:{"5,8":"ROUTE 5 — The green thins. The Thar begins. Carry water."},
+ wild:{rate:0.13,pool:[[41,18,21,20],[43,18,21,15],[44,18,21,20],[39,18,21,15],[16,19,21,10],[50,18,20,15],[46,18,20,5]]},
+ blocks:[{x:2,y:19,flagNot:"badge3",who:"Camel Herder",text:["The desert eats the unprepared, beta.","Come back with Vikram's Akhada Badge — then I'll believe you're ready."]}],
+ trainers:[
+  {x:9,y:5,d:3,los:4,name:"Herder Devi",team:[[41,19],[41,20]],money:640,pre:["My camels race the sunset. You race me?"],post:["Fine legs! For a two-legs."]},
+ ]});
+//---------------- THAR DESERT (open sand crossing) ----------------
+M_("thardesert","Thar Desert","desert","desert",[
+"TTTTTTTTTTTTTTTTTTTTTTTTTTTTTT",
+"TsssSSSSSS...SSSSSsss..SSSSssT",
+"Ts..SSSSS..R..SSSS......SSS.sT",
+"T....SS........SS....R....S..T",
+"TS........ss.......~.........E",
+"TS..R.....ss...SSSS........SSE",
+"T......~.......SSSS..ss......T",
+"TSS.........R........ss...R..T",
+"TSSS...ss.......!............T",
+"TS.....ss....SSS......SSS...ST",
+"T............SSS..R...SSS..SST",
+"T...R................~......ST",
+"TS......SSSS......ss......R..T",
+"TS..~...SSSS......ss.........T",
+"T............R...........SSST",
+"T..SSS..............SSS..SSST",
+"TS.SSS....~...R.....SSS......T",
+"TTTETTTTTTTTTTTTTTTTTTTTTTTTTT"],
+{exits:[{x:3,y:17,w:1,h:1,to:"route5",tx:6,ty:1},{x:29,y:4,w:1,h:2,to:"marudhara",tx:1,ty:10}],
+ signs:{"16,8":"THAR DESERT — Follow the fort's silhouette north-east."},
+ wild:{rate:0.15,pool:[[41,22,26,20],[43,22,26,20],[44,22,26,15],[45,28,30,4],[39,22,25,15],[42,30,32,3],[67,30,32,2],[46,22,24,10]]},
+ trainers:[
+  {x:12,y:6,d:2,los:4,name:"Nomad Sarfraz",team:[[43,23],[41,24]],money:800,pre:["The dunes shift, but my aim doesn't!"],post:["Drink. Water is victory out here."]},
+  {x:20,y:13,d:3,los:4,name:"Ruin Hunter Ila",team:[[39,24],[55,25]],money:850,pre:["These sands bury forts, temples, empires... and challengers!"],post:["Dig deep enough and everything is history."]},
+ ]});
+//---------------- MARUDHARA TOWN (gym 5 ground, Jaisalmer-like) ----------------
+M_("marudhara","Marudhara Town","desert","town",[
+"TTTTTTTTTTTTTTTTTTTTTT",
+"TssssMMMMMMMMMMssssssT",
+"Tss..MHHHHHHHHM....ssT",
+"Ts...MHHHHHHHHM.....sT",
+"T....MHHHYYHHHM..~..sT",
+"T.....MMMYYMMM......ST",
+"TS.......,,.......SSST",
+"T..HH....,,...HH....ST",
+"T..HH..~.,,...HH.....T",
+"E........,,..........T",
+"E..C..m..,,...!...~..T",
+"T........,,.........ST",
+"TS..~....,,..HH.....ST",
+"TsS......,,..HH....SsT",
+"TssS.....,,........ssT",
+"TTTTTTTTTEETTTTTTTTTTT"],
+{exits:[{x:0,y:9,w:1,h:2,to:"thardesert",tx:28,ty:5},{x:9,y:15,w:2,h:1,to:"route6",tx:1,ty:6}],
+ gym:4,
+ signs:{"14,10":"MARUDHARA — The golden fort city. Every wall remembers a song."},
+ npcs:[
+  {x:16,y:8,d:3,name:"Puppeteer",text:["My kathputli dance without strings — Rangolil possessed them!","Gym Leader Rajveer's family guarded this fort for nine generations."]},
+  {x:5,y:12,d:2,name:"Miner",text:["East from here the land greens again — the great river plain.","Rajveer's Gajraj once stopped a sandstorm. With its FOREHEAD."]},
+ ]});
+//---------------- ROUTE 6 (east across the plain to the Ganga) ----------------
+M_("route6","Route 6 — Gangetic Plain","river","route",[
+"TTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT",
+"T...GG......GGG.....~....GG....GGG...T",
+"T...GG..~...GGG..........GG....GGG...T",
+"T........................~..........T",
+"TWWWWWWWB........GGG.........WWWWWWWWT",
+"EWWWWWWWB..!.....GGG..GG.....WWWWWWWWT",
+"E........................GG.........E",
+"T....GGG.......~....................E",
+"T....GGG....GG......GG...~...GG.....T",
+"T...........GG..~...GG.......GG..~..T",
+"T..~........GG......................T",
+"TTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT"],
+{exits:[{x:0,y:5,w:1,h:2,to:"marudhara",tx:9,ty:14},{x:36,y:6,w:1,h:2,to:"gangacity",tx:1,ty:12}],
+ signs:{"11,5":"ROUTE 6 — The river plain. Wheat on both sides, sky above, dust between."},
+ wild:{rate:0.13,pool:[[17,26,29,10],[15,26,29,15],[22,26,29,20],[24,26,29,15],[34,26,28,15],[37,27,29,15],[54,29,31,3],[63,29,31,7]]},
+ blocks:[{x:2,y:6,flagNot:"badge4",who:"Farmer",text:["Floods took the east bridge. Repairs going on.","Show me Rajveer's Dune Badge and I'll point you the safe ford."]}],
+ trainers:[
+  {x:14,y:7,d:3,los:4,name:"Farmer Balram",team:[[17,27],[22,28]],money:980,pre:["My Gomata ploughs, my Hathkin lifts. What does YOUR team do?"],post:["Strong hands, stronger Pokémon. Respect."]},
+  {x:27,y:8,d:2,los:4,name:"Boatman Kishan",team:[[24,28],[25,29]],money:1000,pre:["The river gives and the river takes. Today it takes your pride!"],post:["The river gave you this one."]},
+ ]});
+//---------------- GANGA CITY (gym 6 ghost, Varanasi-like) ----------------
+M_("gangacity","Ganga City","river","ghost",[
+"TTTTTTTTTTTTTTTTTTTTTT",
+"T,,,,,,,,,,,,,,,,,,,,,T".slice(0,22)+"T",
+"T,HH,HH,,,YY,,,HH,HH,T",
+"T,HH,HH,,,YY,,,HH,HH,T",
+"T,,,,,,,,,,,,,,,,,,,,T",
+"T,,C,,,,m,,,,!,,,~,,,T",
+"T,,,,,,,,,,,,,,,,,,,,T",
+"T,HH,,,,DD,,,,,,HH,,,T",
+"T,HH,,,,DD,,,,,,HH,,,T",
+"T,,,,,,,,,,,,,,,,,,,,T",
+"T,,,,,,,,,,,,,,,,,,,,E",
+"T....................E",
+"E....................T",
+"E....................T",
+"TWWWWWWWWWBBWWWWWWWWWT",
+"TWWWWWWWWWBBWWWWWWWWWT",
+"TWWWWWWWWWWWWWWWWWWWWT",
+"TTTTTTTTTTTTTTTTTTTTTT"],
+{exits:[{x:0,y:12,w:1,h:2,to:"route6",tx:36,ty:6},{x:21,y:10,w:1,h:2,to:"route7",tx:1,ty:5}],
+ gym:5, doorD:{kind:"ghat"},
+ signs:{"13,5":"GANGA CITY — Older than history. The ghats glow with ten thousand diyas."},
+ npcs:[
+  {x:6,y:9,d:2,name:"Priest",text:["The river carries our prayers... and lately, someone's sludge.","Gym Leader Kashvi speaks with the spirits of the ghats."]},
+  {x:16,y:6,d:3,name:"Boat Guide",text:["Sunrise boat ride? The Susurin surface at dawn — blind, but they see you.","Grey pipes upstream. Dhuan Works again. The dolphins are leaving..."]},
+ ]});
+//---------------- ROUTE 7 (east to the tea hills) ----------------
+M_("route7","Route 7 — Teesta Trail","hills","route",[
+"TTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT",
+"T..MMM....GGG....MMMM....GGG..MMMT",
+"T..MMM....GGG.....MMMM...GGG..MMMT",
+"T...~..........~.............~...T",
+"E......GG............GG..........T",
+"E......GG...MMM......GG....MM....E",
+"T..!........MMM..~.........MM....E",
+"T.....GGG........................T",
+"T.....GGG....GG.....GGG..GG..~...T",
+"T..~.........GG.....GGG..GG......T",
+"T................................T",
+"TTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT"],
+{exits:[{x:0,y:4,w:1,h:2,to:"gangacity",tx:20,ty:11},{x:33,y:5,w:1,h:2,to:"chaihills",tx:1,ty:11}],
+ signs:{"3,6":"ROUTE 7 — TEESTA TRAIL. The air cools. The hills begin to sing."},
+ wild:{rate:0.14,pool:[[30,32,35,20],[9,32,34,15],[11,32,34,10],[62,33,35,15],[58,34,36,10],[31,36,38,4],[10,33,35,10],[66,33,35,8]]},
+ blocks:[{x:2,y:5,flagNot:"dhuan_ganga",who:"Ghat Keeper",text:["The trail east is shut — the river folk are marching on the sludge pipe.","Help Kashvi drive Team Dhuan off the ghats first!"]}],
+ trainers:[
+  {x:11,y:7,d:3,los:4,name:"Guide Norbu",team:[[62,33],[58,34]],money:1200,pre:["I guide trekkers up, and challengers down!"],post:["The hills accept you. Go on up."]},
+  {x:25,y:4,d:2,los:4,name:"Botanist Rhea",team:[[30,34],[31,36]],money:1250,pre:["Tea is a science. So is battle!"],post:["First flush! You're first-flush grade."]},
+ ]});
+//---------------- CHAI HILLS (gym 7 flying, Darjeeling-like) ----------------
+M_("chaihills","Chai Hills","hills","town",[
+"TTTTTTTTTTTTTTTTTTTTTT",
+"TMMMM...MMMMMM...MMMMT",
+"TMM....~..............".slice(0,21)+"T",
+"TM...HH....YY...HH...T",
+"T....HH....YY...HH...T",
+"T.....,,,,,,,,,,,....T",
+"T..~..,GGG...GGG,....T",
+"T.....,GGG...GGG,.~..T",
+"E.....,,,,,,,,,,,....T",
+"E..C.....m....!......E",
+"T....................E",
+"T..HH..~......HH.....T",
+"T..HH.........HH..~..T",
+"TMM..................T",
+"TTTTTTTTTTTTTTTTTTTTTT"],
+{exits:[{x:0,y:8,w:1,h:2,to:"route7",tx:32,ty:5},{x:21,y:9,w:1,h:2,to:"route8",tx:12,ty:16}],
+ gym:6,
+ signs:{"14,9":"CHAI HILLS — Two leaves and a bud. Trains run on toy tracks and time stands still."},
+ npcs:[
+  {x:6,y:11,d:2,name:"Tea Master",text:["Smell that? Second flush. The Chaisage bless the harvest.","Gym Leader Tenzin glides down from the monastery on festival days."]},
+  {x:15,y:6,d:2,name:"Monk",text:["North lies the roof of the world — and lately, a wall of smog.","Dhuan Works built a furnace on the pass. The mountain is angry."]},
+ ]});
+//---------------- ROUTE 8 (mountain pass, factory blocks the way) ----------------
+M_("route8","Route 8 — Himalayan Pass","hills","route",[
+"TTTTTTEETTTTTT",
+"TMMM......MMMT",
+"TMM..GG....MMT",
+"TM...GG..~..MT",
+"T............T",
+"TM....R......T",
+"TM..........MT",
+"T....GG.....MT",
+"T~...GG..GG..T",
+"TM.......GG.MT",
+"TM...!......MT",
+"T....DD.....MT",
+"TM...DD......T",
+"TM..........MT",
+"T....GG..~..MT",
+"TM...GG.....MT",
+"TM...........E",
+"TM..........ME",
+"TTTTTTTTTTTTTT"],
+{exits:[{x:6,y:0,w:2,h:1,to:"himadri",tx:10,ty:13},{x:13,y:16,w:1,h:2,to:"chaihills",tx:20,ty:9}],
+ doorD:{kind:"factory"},
+ signs:{"5,10":"ROUTE 8 — DANGER: heavy smog beyond this point. Dhuan Works site office ahead."},
+ wild:{rate:0.13,pool:[[58,36,39,20],[60,36,39,15],[61,36,39,15],[62,36,38,10],[39,36,38,10],[52,37,39,15]]},
+ blocks:[{x:6,y:4,flagNot:"dhuan_factory",who:"Dhuan Guard",text:["Oi! Pass closed. Company property. The smog? That's 'industrial weather'.","Boss Raakh is starting the Great Furnace today. Scram, kid."]}],
+ trainers:[
+  {x:9,y:7,d:3,los:4,name:"Trekker Anmol",team:[[60,37],[58,37]],money:1400,pre:["Altitude training! You'll feel it in three steps!"],post:["*wheeze* Good... lungs..."]},
+ ]});
+//---------------- DHUAN WORKS (evil HQ dungeon) ----------------
+M_("dhuanworks","Dhuan Works","factory","evil",[
+"######################",
+"#d..d##d...d##d....d.#",
+"#.##.#..##..#..####..#",
+"#.##.#..##..#..#..#..#",
+"#....#..##..#..#..#..#",
+"#.##....##.....#.....#",
+"#.##..#....##..####..#",
+"#....##..#.##........#",
+"##.#..#..#.....##.#.##",
+"#..#.....#..#..##.#..#",
+"#.....#..#..#........#",
+"#..#..#.....#..#..#..#",
+"#..#..##.#..#..#..#..#",
+"#..........#....#....#",
+"##########EE##########"],
+{exits:[{x:10,y:14,w:2,h:1,to:"route8",tx:5,ty:12}],
+ signs:{},
+ wild:{rate:0.10,pool:[[50,38,41,25],[52,38,41,25],[49,38,41,20],[46,38,40,10],[51,40,42,10]]},
+ trainers:[
+  {x:4,y:3,d:2,los:4,name:"Dhuan Grunt",team:[[50,38],[52,39]],money:1500,pre:["The boss says smoke means salary! Get lost!"],post:["My salary... is literally ash."]},
+  {x:10,y:6,d:3,los:4,name:"Dhuan Grunt",team:[[49,39],[50,39]],money:1500,pre:["We bottle the sky and sell it back as 'clean air premium'!"],post:["Maybe... maybe we're the baddies?"]},
+  {x:17,y:10,d:0,los:4,name:"Dhuan Admin Kaalika",team:[[45,41],[53,42],[16,41]],money:2600,pre:["You again. The child who unclogged the beach and the ghats.","The Great Furnace will wake Dhuasur — and Dhuasur will make the sky OURS to sell."],post:["Cough... the boss is on the roof. You're too late."]},
+ ]});
+//---------------- HIMADRI CITY (gym 8 ice, Himalayan) ----------------
+M_("himadri","Himadri City","snow","snow",[
+"TTTTTTTTTTEETTTTTTTTTT",
+"TMMMMMM.ii..ii.MMMMMMT",
+"TMMM..iiiiiiiiii..MMMT",
+"TM..ii..........ii..MT",
+"T..i....HH..HH....i.MT",
+"T.ii....HH..HH....ii.T",
+"T.i..~............ii.T",
+"T.i....YY....HH....i.T",
+"T.ii...YY....HH...ii.T",
+"T..i..............i..T",
+"T..C....m....!....~..T",
+"T.ii..............ii.T",
+"TMi....HH..HH.....iMT".slice(0,21)+"T",
+"TM.....HH..HH.......MT",
+"TMMMM..........MMMMMT".slice(0,21)+"T",
+"TTTTTTTTTTEETTTTTTTTTT"],
+{exits:[{x:10,y:0,w:2,h:1,to:"route9",tx:6,ty:16},{x:10,y:15,w:2,h:1,to:"route8",tx:6,ty:1}],
+ gym:7,
+ signs:{"13,10":"HIMADRI — Highest city in Bharatva. The mountain decides who stays."},
+ npcs:[
+  {x:7,y:5,d:2,name:"Sherpa",text:["The air is thin. The chai is thick. Balance in all things.","Gym Leader Devika meditates under the frozen waterfall. Barefoot."]},
+  {x:15,y:8,d:3,name:"Pilgrim",text:["Beyond the north gate: the Spire of Clouds, then Victory Road.","They say the League sits on a plateau where the first kings were crowned."]},
+ ]});
+//---------------- ROUTE 9 (high approach; spire branch) ----------------
+M_("route9","Route 9 — Roof of the World","snow","snow",[
+"TTTTTTEETTTTTT",
+"TMMi......iMMT",
+"TM..ii..ii..MT",
+"T....i..i...MT",
+"TM..........MT",
+"TM..!..DD...MT",
+"T......DD..iMT",
+"TMi.........MT",
+"TM...ii.....MT",
+"T..ii..ii..iMT",
+"TM..........MT",
+"TM..ii..ii..MT",
+"T...ii..ii..MT",
+"TMi........iMT",
+"TM..........MT",
+"TM...ii.....MT",
+"TTTTTTEETTTTTT"],
+{exits:[{x:6,y:0,w:2,h:1,to:"victoryroad",tx:2,ty:13},{x:6,y:16,w:2,h:1,to:"himadri",tx:10,ty:1}],
+ doorD:{kind:"spire"},
+ signs:{"4,5":"MEGHDOOT SPIRE — The cloud messenger's perch. Only the storm-hearted may climb."},
+ wild:{rate:0.12,pool:[[58,40,43,20],[59,44,46,5],[60,40,43,20],[61,40,43,20],[39,40,42,10]]},
+ blocks:[{x:6,y:1,flagNot:"badges8",who:"League Guard",text:["Victory Road lies beyond. Eight badges or eight excuses — show me one."]}],
+ trainers:[
+  {x:9,y:9,d:3,los:4,name:"Ace Trainer Zara",team:[[61,41],[59,44],[35,42]],money:2100,pre:["Everyone strong ends up on this road eventually. Hello, everyone strong."],post:["See you at the League. I'll be back."]},
+ ]});
+//---------------- VICTORY ROAD (final cave) ----------------
+M_("victoryroad","Victory Road","cave","cave",[
+"######################",
+"#dd..##....d##....dd##",
+"#.##....##...##.##...#",
+"#.##.##.##.#.....##..#",
+"#....##....#..##.....#",
+"##.#....##.#..##.#####",
+"#..#.##.##......#....#",
+"#..#.##....##.#....#.#",
+"#....##..#.##.####.#.#",
+"#.##.....#.......#...#",
+"#.##.#.###.##.#..###.#",
+"#....#.....##.#......#",
+"#.####.#####..###.##.#",
+"#dd........#......##E#",
+"######################"],
+{exits:[{x:20,y:13,w:1,h:1,to:"league",tx:10,ty:12},{x:2,y:13,w:1,h:1,to:"route9",tx:6,ty:1}],
+ wild:{rate:0.15,pool:[[39,42,45,20],[40,44,46,10],[55,42,45,15],[19,43,45,10],[58,42,45,15],[65,45,47,4],[60,42,44,15]]},
+ trainers:[
+  {x:8,y:4,d:3,los:4,name:"Veteran Iqbal",team:[[38,44],[23,44],[57,45]],money:2600,pre:["Thirty years I've trained. You have thirty seconds to impress me."],post:["...Impressive. Twenty-nine seconds."]},
+  {x:15,y:9,d:0,los:4,name:"Ace Trainer Kaveri",team:[[2,45],[35,45],[64,46]],money:2700,pre:["Past me is the League. There is no past me."],post:["There is a past me after all."]},
+ ]});
+//---------------- INDRAPRASTHA LEAGUE ----------------
+M_("league","Indraprastha League","league","league",[
+"TTTTTTTTTTTTTTTTTTTTTT",
+"TMM....~......~...MMMT",
+"T....................T",
+"T......HHHHHHHH......T",
+"T......HHHHHHHH......T",
+"T......HHDDHHHH......T",
+"T........,,.........T".slice(0,21)+"T",
+"T..~.....,,......~...T",
+"T........,,..........T",
+"T..C.....,,....m.....T",
+"T........,,..........T",
+"T....!...,,..........T",
+"T........,,..........T",
+"TTTTTTTTTTEETTTTTTTTTT"],
+{exits:[{x:10,y:13,w:2,h:1,to:"victoryroad",tx:20,ty:12}],
+ doorD:{kind:"league"},
+ signs:{"5,11":"INDRAPRASTHA LEAGUE — Where the first kings were crowned, new champions rise."},
+ npcs:[
+  {x:15,y:7,d:3,name:"Attendant",text:["Beyond that door: four Elite trainers, then the Champion.","No healing between battles... just kidding, we're not monsters. Center's right there."]},
+ ]});
+//---------------- MEGHDOOT SPIRE (legendary) ----------------
+M_("meghdoot","Meghdoot Spire","snow","ghost",[
+"##############",
+"#ii..ii..ii..#",
+"#.....L......#".replace("L","d"),
+"#..ii....ii..#",
+"#....dddd....#",
+"#....dddd....#",
+"#..ii....ii..#",
+"#.....ii.....#",
+"#ii........ii#",
+"######EE######"],
+{exits:[{x:6,y:9,w:2,h:1,to:"route9",tx:8,ty:6}],
+ legendary:{x:7,y:4,id:68,lvl:50,flag:"got_garjaraj",
+  text:["The clouds spiral above the spire...","GARJARAJ, the monsoon incarnate, descends with a thunderclap!"]},
+ });
+//---------------- HIMGUFA (postgame mythic cave) ----------------
+M_("himgufa","Him-Gufa","cave","ghost",[
+"##############",
+"#dd..##..##..#",
+"#....##......#",
+"#.##.....##..#",
+"#.##..d..##..#",
+"#............#",
+"#..##..##..###",
+"#..##..##....#",
+"######EE######"],
+{exits:[{x:6,y:8,w:2,h:1,to:"route9",tx:8,ty:6}],
+ legendary:{x:6,y:4,id:70,lvl:55,flag:"got_shweta",
+  text:["The snow here is untouched. The silence is a presence...","SHWETAVYA, the white tiger of the century, opens its eyes!"]},
+ wild:{rate:0.10,pool:[[58,44,47,40],[59,46,48,10],[60,44,47,30],[65,47,49,5]]},
+ });
+
+//////////////////// GYMS ////////////////////
+const GYMS=[
+ {city:"Malabar",leader:"Meera",type:"Grass",badge:"Spice Badge",
+  team:[[30,10],[28,11],[0,13]],money:1600,
+  pre:["Welcome to the spice garden gym! I'm Meera.","Everything here grows slow and strong — cardamom, pepper, Pokémon.","Show me what you've grown!"],
+  post:["Beautifully grown! The Spice Badge is yours.","Growth can't be rushed — but you're right on season."]},
+ {city:"Yantra",leader:"Arjun",type:"Electric",badge:"Circuit Badge",
+  team:[[34,16],[35,18]],money:2200,
+  pre:["Hey! Arjun. I wired this gym myself — every switch, every spark.","Let's see if your logic handles my current!"],
+  post:["Circuit closed! Take the Circuit Badge.","You debug battles the way I debug code. Respect."]},
+ {city:"Sona Beach",leader:"Zoya",type:"Water",badge:"Shell Badge",
+  team:[[24,20],[27,21],[29,23]],money:2800,
+  pre:["I'm Zoya! I've surfed every wave on this coast.","And I've never — NEVER — let plastic goons or challengers wipe me out. Let's go!"],
+  post:["Wipeout! ...Mine, for once. The Shell Badge is yours.","Keep our waters clean, alright? You've seen what happens."]},
+ {city:"Mahanagar",leader:"Vikram",type:"Fighting",badge:"Akhada Badge",
+  team:[[37,25],[10,26],[38,28]],money:3400,
+  pre:["Welcome to my akhada. Vikram. Wrestler. Third generation.","In this city everyone fights for space, for trains, for dreams.","Show me your fight!"],
+  post:["HAAH! Pinned! Take the Akhada Badge.","Your Pokémon fight like locals. Highest praise."]},
+ {city:"Marudhara",leader:"Rajveer",type:"Ground",badge:"Dune Badge",
+  team:[[41,29],[39,30],[23,32]],money:4000,
+  pre:["I am Rajveer, ninth keeper of the golden fort.","The desert teaches patience. The fort teaches defence. I teach both."],
+  post:["The fort yields! The Dune Badge is yours.","May your road east be green, challenger."]},
+ {city:"Ganga",leader:"Kashvi",type:"Ghost",badge:"Diya Badge",
+  team:[[47,33],[49,34],[48,36]],money:4600,
+  pre:["Shh. The spirits of ten thousand evenings drift through this gym.","I am Kashvi. They speak through me. Tonight, they wish to battle."],
+  post:["The diyas bow to you. Take the Diya Badge.","The spirits like you. That is rare. And slightly alarming."]},
+ {city:"Chai Hills",leader:"Tenzin",type:"Flying",badge:"Summit Badge",
+  team:[[61,37],[12,38],[27,40]],money:5200,
+  pre:["Welcome above the clouds. I am Tenzin.","Up here the wind decides everything. Let's ask it about you."],
+  post:["The wind says: worthy. The Summit Badge is yours.","One more climb remains. The coldest one."]},
+ {city:"Himadri",leader:"Devika",type:"Ice",badge:"Glacier Badge",
+  team:[[60,42],[61,43],[59,45]],money:6000,
+  pre:["You climbed well. I am Devika. The mountain and I have an understanding.","It sends me challengers. I send back stronger ones — or frozen ones."],
+  post:["...The mountain approves. The Glacier Badge — and my respect.","The League awaits past Victory Road. Go claim the plateau."]},
+];
+//////////////////// ELITE FOUR + CHAMPION ////////////////////
+const ELITE=[
+ {name:"Elite Visha",type:"Poison",team:[[19,47],[45,47],[49,48],[53,49]],money:9000,
+  pre:["I am Visha. Venom is honest — it never pretends to be anything else.","Can you say the same about your courage?"],
+  post:["Honest strength. Go on."]},
+ {name:"Elite Dhyan",type:"Psychic",team:[[12,48],[31,48],[36,49],[54,50]],money:9500,
+  pre:["Breathe in... breathe out. I am Dhyan.","I already know your next four moves. Surprise me anyway."],
+  post:["...I did not foresee that. Wonderful."]},
+ {name:"Elite Ispat",type:"Steel",team:[[56,49],[55,49],[35,50],[57,51]],money:10000,
+  pre:["Ispat. I built bridges before I built teams. Both must bear weight.","Let's test your load-bearing capacity."],
+  post:["Structurally sound. Pass."]},
+ {name:"Elite Naaganya",type:"Dragon",team:[[19,50],[8,51],[65,52],[65,53]],money:11000,
+  pre:["The old serpents of this land answer to me. Naaganya.","One door remains after mine. Earn it."],
+  post:["The serpents bow. The door opens."]},
+];
+const CHAMPION={name:"Champion Kiran",money:20000,
+  pre:["...You made it. Of course you made it.","From Prof. Neem's lab to the roof of the world — I watched you the whole way.","One last battle. Not rivals. Legends."],
+  post:["...I always knew, somewhere on Route 1, that it would be you.","CONGRATULATIONS, CHAMPION OF BHARATVA!"]};
+</script>
+<script>
+"use strict";
+//////////////////// GAME STATE ////////////////////
+const WALK=new Set([".",":",",","_","S","i","d","~","G","B","E"]);
+const DOORS=new Set(["C","m","Y","D"]);
+// normalize map rows (defensive: pad/trim to declared width)
+for(const id in MAPS){ const m=MAPS[id];
+  m.rows=m.rows.map(r=>{ r=String(r); const fill=(id==="dhuanworks"||id==="victoryroad"||id==="himgufa"||id==="meghdoot")?"#":"T";
+    return r.length<m.w ? r+fill.repeat(m.w-r.length) : r.slice(0,m.w); });
+}
+function tileOf(m,x,y){ if(x<0||y<0||x>=m.w||y>=m.h) return "T"; return m.rows[y][x]; }
+const G={
+  scene:"title",       // title|intro|world|dialog|battle|menu|starter|fade
+  map:null, px:5, py:5, dir:0,   // dir 0=down 1=up 2=left 3=right
+  moving:0, mx:0, my:0,          // animation progress + move delta
+  party:[], box:[], bag:{"Poké Ball":5,"Potion":2}, money:3000,
+  badges:[false,false,false,false,false,false,false,false],
+  flags:{}, beaten:{},           // trainer ids beaten
+  lastHeal:{map:"nariyalpur",x:8,y:8},
+  steps:0, repel:0, name:"AVANI", rivalName:"KIRAN",
+  starterId:null, dexSeen:new Set(), dexCaught:new Set(),
+};
+const DIRV=[[0,1],[0,-1],[-1,0],[1,0]];
+//////////////////// MON INSTANCES ////////////////////
+function statCalc(base,lvl,isHp){ return isHp? Math.floor(base*2*lvl/100)+lvl+10 : Math.floor(base*2*lvl/100)+5; }
+function makeMon(id,lvl){
+  const sp=DEX[id];
+  const mv=sp.mv.filter(m=>m[0]<=lvl).slice(-4).map(m=>m[1]);
+  const mon={id,lvl,xp:lvl*lvl*lvl,moves:mv,status:null,stages:{atk:0,def:0,spd:0},
+    hp:0,maxhp:0,nick:sp.n};
+  recalcStats(mon); mon.hp=mon.maxhp;
+  return mon;
+}
+function recalcStats(m){
+  const b=DEX[m.id].bs;
+  const old=m.maxhp;
+  m.maxhp=statCalc(b[0],m.lvl,true);
+  m.atk=statCalc(b[1],m.lvl); m.def=statCalc(b[2],m.lvl);
+  m.spd=statCalc(b[3],m.lvl); m.spc=statCalc(b[4],m.lvl);
+  if(old) m.hp=Math.min(m.maxhp,m.hp+(m.maxhp-old));
+}
+function xpForLevel(l){ return l*l*l; }
+function healParty(){ G.party.forEach(m=>{m.hp=m.maxhp;m.status=null;}); }
+function partyAlive(){ return G.party.some(m=>m.hp>0); }
+function firstAlive(){ return G.party.findIndex(m=>m.hp>0); }
+//////////////////// SAVE/LOAD ////////////////////
+function saveGame(){
+  try{
+    const data={party:G.party,box:G.box,bag:G.bag,money:G.money,badges:G.badges,flags:G.flags,
+      beaten:G.beaten,map:G.map,px:G.px,py:G.py,lastHeal:G.lastHeal,starterId:G.starterId,
+      seen:[...G.dexSeen],caught:[...G.dexCaught]};
+    localStorage.setItem("bharatva-save",JSON.stringify(data));
+    return true;
+  }catch(e){ return false; }
+}
+function loadGame(){
+  try{
+    const s=localStorage.getItem("bharatva-save"); if(!s) return false;
+    const d=JSON.parse(s);
+    Object.assign(G,{party:d.party,box:d.box||[],bag:d.bag,money:d.money,badges:d.badges,
+      flags:d.flags,beaten:d.beaten,map:d.map,px:d.px,py:d.py,lastHeal:d.lastHeal,starterId:d.starterId});
+    G.dexSeen=new Set(d.seen||[]); G.dexCaught=new Set(d.caught||[]);
+    G.party.forEach(m=>{ if(!m.stages) m.stages={atk:0,def:0,spd:0}; });
+    return true;
+  }catch(e){ return false; }
+}
+function hasSave(){ try{ return !!localStorage.getItem("bharatva-save"); }catch(e){ return false; } }
+//////////////////// DIALOG SYSTEM ////////////////////
+const DLG={pages:[],idx:0,chars:0,cb:null,choice:null,choiceIdx:0,active:false};
+function say(pages,cb){
+  DLG.pages=Array.isArray(pages)?pages.slice():[pages];
+  DLG.idx=0; DLG.chars=0; DLG.cb=cb||null; DLG.choice=null; DLG.active=true;
+}
+function ask(question,options,cb){
+  say([question],()=>{});
+  DLG.choice=options; DLG.choiceIdx=0; DLG.cb=cb;
+}
+function updateDialog(){
+  const page=DLG.pages[DLG.idx]||"";
+  if(DLG.chars<page.length){ DLG.chars+=2; if(tapA()){DLG.chars=page.length;} return; }
+  if(DLG.choice&&DLG.idx===DLG.pages.length-1){
+    if(tapped("arrowdown")){DLG.choiceIdx=(DLG.choiceIdx+1)%DLG.choice.length; sfx.sel();}
+    if(tapped("arrowup")){DLG.choiceIdx=(DLG.choiceIdx+DLG.choice.length-1)%DLG.choice.length; sfx.sel();}
+    if(tapA()){ const cb=DLG.cb,ci=DLG.choiceIdx; DLG.active=false; DLG.choice=null; sfx.ok(); if(cb)cb(ci); }
+    if(tapB()){ const cb=DLG.cb; DLG.active=false; DLG.choice=null; sfx.no(); if(cb)cb(-1); }
+    return;
+  }
+  if(tapA()||tapB()){
+    if(DLG.idx<DLG.pages.length-1){ DLG.idx++; DLG.chars=0; sfx.sel(); }
+    else{ const cb=DLG.cb; DLG.active=false; if(cb)cb(); }
+  }
+}
+function drawTextBox(text,full){
+  const bx=12,by=cv.height-118,bw=cv.width-24,bh=106;
+  ctx.fillStyle="#f8f4e8"; rr2(bx,by,bw,bh,10); ctx.fill();
+  ctx.strokeStyle="#4a4088"; ctx.lineWidth=4; rr2(bx+3,by+3,bw-6,bh-6,8); ctx.stroke();
+  ctx.fillStyle="#2a2440"; ctx.font="bold 19px 'Trebuchet MS'"; ctx.textAlign="left";
+  wrapText(text,bx+22,by+34,bw-44,26);
+  if(full){ ctx.fillStyle="#c05838"; const t=(tick>>4)%2; if(t) { ctx.beginPath(); ctx.moveTo(bx+bw-30,by+bh-22); ctx.lineTo(bx+bw-16,by+bh-22); ctx.lineTo(bx+bw-23,by+bh-12); ctx.fill(); } }
+}
+function wrapText(text,x,y,maxW,lh){
+  const words=String(text).split(" "); let line="",yy=y;
+  for(const w of words){
+    const test=line?line+" "+w:w;
+    if(ctx.measureText(test).width>maxW){ ctx.fillText(line,x,yy); line=w; yy+=lh; }
+    else line=test;
+  }
+  ctx.fillText(line,x,yy);
+}
+function rr2(x,y,w,h,r){ ctx.beginPath(); ctx.roundRect(x,y,w,h,r); }
+//////////////////// FADE / WARP ////////////////////
+let fade={t:0,dir:0,cb:null}; // dir 1 = fading out
+function fadeTo(cb){ fade={t:0,dir:1,cb}; }
+function updateFade(){
+  if(fade.dir===1){ fade.t+=0.08; if(fade.t>=1){ fade.t=1; fade.dir=-1; if(fade.cb){const c=fade.cb;fade.cb=null;c();} } }
+  else if(fade.dir===-1){ fade.t-=0.08; if(fade.t<=0){ fade.t=0; fade.dir=0; } }
+}
+function warp(mapId,x,y){
+  fadeTo(()=>{ G.map=mapId; G.px=x; G.py=y; G.moving=0;
+    const m=MAPS[mapId]; MUSIC.play(m.music||"town");
+  });
+}
+//////////////////// OVERWORLD ////////////////////
+function curMap(){ return MAPS[G.map]; }
+function isWalkable(m,x,y){
+  const t=tileOf(m,x,y);
+  if(!WALK.has(t)&&!DOORS.has(t)) return false;
+  // blocks (story roadblocks act as NPCs standing there)
+  for(const b of m.blocks) if(b.x===x&&b.y===y&&blockActive(b)) return false;
+  for(const n of m.npcs) if(n.x===x&&n.y===y) return false;
+  for(const tr of m.trainers) if(tr.x===x&&tr.y===y) return false;
+  if(m.legendary&&!G.flags[m.legendary.flag]&&m.legendary.x===x&&m.legendary.y===y) return false;
+  return true;
+}
+function blockActive(b){
+  if(b.flagNot==="badges8") return !G.badges.every(x=>x);
+  if(b.flagNot&&b.flagNot.startsWith("badge")&&b.flagNot.length===6) return !G.badges[+b.flagNot[5]];
+  if(b.flagNot) return !G.flags[b.flagNot];
+  return true;
+}
+function updateWorld(){
+  if(DLG.active){ updateDialog(); return; }
+  if(fade.dir!==0) return;
+  if(tapMenu()){ openMenu(); return; }
+  if(G.moving>0){
+    G.moving-=0.125;
+    if(G.moving<=0){
+      G.moving=0; G.px+=G.mx; G.py+=G.my; G.steps++;
+      onStep();
+    }
+    return;
+  }
+  // trainer LoS check
+  const m=curMap();
+  for(const tr of m.trainers){
+    const tid=G.map+":"+tr.x+","+tr.y;
+    if(G.beaten[tid]) continue;
+    const [dx,dy]=DIRV[tr.d];
+    for(let i=1;i<=tr.los;i++){
+      const lx=tr.x+dx*i, ly=tr.y+dy*i;
+      if(!WALK.has(tileOf(m,lx,ly))&&!DOORS.has(tileOf(m,lx,ly))) break;
+      if(lx===G.px&&ly===G.py){
+        startTrainerBattle(tr,tid);
+        return;
+      }
+    }
+  }
+  // movement input
+  let d=-1;
+  if(keys["arrowdown"]||keys["s"])d=0; else if(keys["arrowup"]||keys["w"])d=1;
+  else if(keys["arrowleft"]||keys["a"])d=2; else if(keys["arrowright"]||keys["d"])d=3;
+  if(d>=0){
+    G.dir=d;
+    const [dx,dy]=DIRV[d], nx=G.px+dx, ny=G.py+dy;
+    const t=tileOf(m,nx,ny);
+    if(DOORS.has(t)){ enterDoor(t,nx,ny); return; }
+    if(isWalkable(m,nx,ny)){ G.moving=1; G.mx=dx; G.my=dy; }
+    else if(tapped("arrow"+["down","up","left","right"][d])) sfx.bump();
+  }
+  if(tapA()) interact();
+}
+function onStep(){
+  const m=curMap();
+  // exits
+  for(const ex of m.exits){
+    if(G.px>=ex.x&&G.px<ex.x+(ex.w||1)&&G.py>=ex.y&&G.py<ex.y+(ex.h||1)){
+      if(ex.cond&&!condMet(ex.cond)){ say(["The way is blocked for now."]); G.px-=G.mx; G.py-=G.my; return; }
+      warp(ex.to,ex.tx,ex.ty); return;
+    }
+  }
+  // wild encounter
+  const t=tileOf(m,G.px,G.py);
+  if(t==="G"&&m.wild&&Math.random()<m.wild.rate&&partyAlive()){
+    const pool=m.wild.pool, total=pool.reduce((s,p)=>s+p[3],0);
+    let r=Math.random()*total, pick=pool[0];
+    for(const p of pool){ r-=p[3]; if(r<=0){pick=p;break;} }
+    const lvl=pick[1]+Math.floor(Math.random()*(pick[2]-pick[1]+1));
+    startWildBattle(makeMon(pick[0],lvl));
+  }
+}
+function condMet(c){
+  if(c.startsWith("badge")) return G.badges[+c[5]];
+  return !!G.flags[c];
+}
+function interact(){
+  const m=curMap(), [dx,dy]=DIRV[G.dir], fx=G.px+dx, fy=G.py+dy;
+  // legendary
+  if(m.legendary&&!G.flags[m.legendary.flag]&&m.legendary.x===fx&&m.legendary.y===fy){
+    const L=m.legendary;
+    say(L.text,()=>{ G.flags[L.flag]=true; startWildBattle(makeMon(L.id,L.lvl),true); });
+    return;
+  }
+  // blocks
+  for(const b of m.blocks) if(b.x===fx&&b.y===fy&&blockActive(b)){ say(b.text.map(t=>b.who+": "+t)); return; }
+  // npcs
+  for(const n of m.npcs) if(n.x===fx&&n.y===fy){ n.d=[1,0,3,2][G.dir]; say(n.text.map(t=>n.name+": "+t)); return; }
+  // trainers (talk = battle if not beaten)
+  for(const tr of m.trainers){
+    const tid=G.map+":"+tr.x+","+tr.y;
+    if(tr.x===fx&&tr.y===fy){
+      if(G.beaten[tid]) say(tr.post.map(t=>tr.name+": "+t));
+      else startTrainerBattle(tr,tid);
+      return;
+    }
+  }
+  // signs
+  const sk=fx+","+fy;
+  if(m.signs&&m.signs[sk]){ say([m.signs[sk]]); return; }
+  const t=tileOf(m,fx,fy);
+  if(DOORS.has(t)) enterDoor(t,fx,fy);
+}
+//////////////////// DOORS: center/mart/gym/story ////////////////////
+function enterDoor(t,x,y){
+  sfx.door();
+  if(t==="C"){ // Pokémon Center
+    G.lastHeal={map:G.map,x:G.px,y:G.py};
+    ask("Nurse Asha: Namaste! Shall I restore your Pokémon to full health?",["Yes please","Also the PC box","Not now"],ci=>{
+      if(ci===0){ healParty(); sfx.heal(); say(["Nurse Asha: All healed! We hope to see you again... wait, no—","Nurse Asha: You know what I mean. Safe travels!"]); }
+      else if(ci===1){ openBoxMenu(); }
+    });
+  } else if(t==="m"){ openMart(); }
+  else if(t==="Y"){ enterGym(); }
+  else if(t==="D"){ storyDoor(); }
+}
+const MART_STOCK=[["Poké Ball",200],["Great Ball",600],["Ultra Ball",1200],["Potion",300],["Super Potion",700],["Hyper Potion",1500],["Full Heal",600],["Revive",1500]];
+function martStockFor(){ // better stock later in game
+  const b=G.badges.filter(x=>x).length;
+  return MART_STOCK.filter((it,i)=>{
+    if(it[0]==="Ultra Ball"&&b<5) return false;
+    if(it[0]==="Hyper Potion"&&b<4) return false;
+    if(it[0]==="Great Ball"&&b<2) return false;
+    if(it[0]==="Revive"&&b<3) return false;
+    return true;
+  });
+}
+//////////////////// MENUS (overworld) ////////////////////
+const MENU={open:false,stack:[]};
+function openMenu(){ MENU.open=true; MENU.stack=[{kind:"main",idx:0}]; sfx.ok(); }
+function menuTop(){ return MENU.stack[MENU.stack.length-1]; }
+function closeAllMenus(){ MENU.open=false; MENU.stack=[]; }
+function openMart(){
+  MENU.open=true; MENU.stack=[{kind:"mart",idx:0,stock:martStockFor()}];
+}
+function openBoxMenu(){
+  MENU.open=true; MENU.stack=[{kind:"box",idx:0,mode:"withdraw"}];
+}
+function updateMenu(){
+  if(DLG.active){ updateDialog(); return; }
+  const t=menuTop(); if(!t){ closeAllMenus(); return; }
+  const move=(n,len)=>{ t.idx=(t.idx+n+len)%len; sfx.sel(); };
+  if(t.kind==="main"){
+    const items=["POKÉMON","BAG","POKÉDEX","BADGES","SAVE","EXIT"];
+    if(tapped("arrowdown"))move(1,items.length); if(tapped("arrowup"))move(-1,items.length);
+    if(tapB()||tapMenu()){ closeAllMenus(); return; }
+    if(tapA()){
+      sfx.ok();
+      if(t.idx===0) MENU.stack.push({kind:"party",idx:0,mode:"view"});
+      else if(t.idx===1) MENU.stack.push({kind:"bag",idx:0,mode:"world"});
+      else if(t.idx===2) MENU.stack.push({kind:"dex",idx:0});
+      else if(t.idx===3) MENU.stack.push({kind:"badges"});
+      else if(t.idx===4){ const ok=saveGame(); say([ok?"Game saved! (Stored in this browser.)":"Save failed — storage unavailable."]); }
+      else closeAllMenus();
+    }
+  } else if(t.kind==="party"){
+    const len=G.party.length;
+    if(len===0){ MENU.stack.pop(); return; }
+    if(tapped("arrowdown"))move(1,len); if(tapped("arrowup"))move(-1,len);
+    if(tapB()){ MENU.stack.pop(); return; }
+    if(tapA()){
+      if(t.mode==="view"){
+        ask(DEX[G.party[t.idx].id].n+" — what to do?",["Summary","Switch position","Cancel"],ci=>{
+          if(ci===0) MENU.stack.push({kind:"summary",mon:G.party[t.idx]});
+          else if(ci===1){ t.mode="swap"; t.swapFrom=t.idx; }
+        });
+      } else if(t.mode==="swap"){
+        const a=t.swapFrom,b=t.idx;
+        [G.party[a],G.party[b]]=[G.party[b],G.party[a]];
+        t.mode="view"; sfx.ok();
+      } else if(t.mode==="useitem"){
+        useItemOn(t.item,G.party[t.idx],()=>{ MENU.stack.pop(); });
+        t.mode="view";
+      }
+    }
+  } else if(t.kind==="summary"){
+    if(tapA()||tapB()) MENU.stack.pop();
+  } else if(t.kind==="bag"){
+    const items=Object.keys(G.bag).filter(k=>G.bag[k]>0);
+    if(items.length===0){ if(tapA()||tapB()){MENU.stack.pop();} return; }
+    if(t.idx>=items.length)t.idx=items.length-1;
+    if(tapped("arrowdown"))move(1,items.length); if(tapped("arrowup"))move(-1,items.length);
+    if(tapB()){ MENU.stack.pop(); return; }
+    if(tapA()){
+      const it=items[t.idx];
+      if(it.includes("Ball")){ say(["Better save those for wild battles!"]); return; }
+      MENU.stack.push({kind:"party",idx:0,mode:"useitem",item:it});
+    }
+  } else if(t.kind==="dex"){
+    if(tapA()||tapB()) MENU.stack.pop();
+  } else if(t.kind==="badges"){
+    if(tapA()||tapB()) MENU.stack.pop();
+  } else if(t.kind==="mart"){
+    const stock=t.stock;
+    if(tapped("arrowdown"))move(1,stock.length+1); if(tapped("arrowup"))move(-1,stock.length+1);
+    if(tapB()){ closeAllMenus(); return; }
+    if(tapA()){
+      if(t.idx===stock.length){ closeAllMenus(); return; }
+      const [name,price]=stock[t.idx];
+      if(G.money<price){ say(["Shopkeeper: Arre, that's "+price+"₹. Come back with more!"]); return; }
+      G.money-=price; G.bag[name]=(G.bag[name]||0)+1; sfx.money();
+    }
+  } else if(t.kind==="box"){
+    const list=t.mode==="withdraw"?G.box:G.party;
+    const len=list.length+1;
+    if(tapped("arrowdown"))move(1,len); if(tapped("arrowup"))move(-1,len);
+    if(tapped("arrowleft")||tapped("arrowright")){ t.mode=t.mode==="withdraw"?"deposit":"withdraw"; t.idx=0; sfx.sel(); }
+    if(tapB()){ closeAllMenus(); return; }
+    if(tapA()){
+      if(t.idx===list.length){ closeAllMenus(); return; }
+      if(t.mode==="withdraw"){
+        if(G.party.length>=6){ say(["Party is full!"]); return; }
+        G.party.push(G.box.splice(t.idx,1)[0]); sfx.ok();
+      } else {
+        if(G.party.length<=1){ say(["You need at least one Pokémon with you!"]); return; }
+        G.box.push(G.party.splice(t.idx,1)[0]); sfx.ok();
+      }
+      if(t.idx>0)t.idx--;
+    }
+  }
+}
+function useItemOn(item,mon,done){
+  const heals={"Potion":20,"Super Potion":60,"Hyper Potion":120};
+  if(heals[item]){
+    if(mon.hp<=0){ say([DEX[mon.id].n+" has fainted — a Potion won't help."]); return; }
+    if(mon.hp>=mon.maxhp){ say(["HP is already full!"]); return; }
+    mon.hp=Math.min(mon.maxhp,mon.hp+heals[item]); G.bag[item]--; sfx.heal();
+    say([DEX[mon.id].n+" recovered health!"],done);
+  } else if(item==="Full Heal"){
+    if(!mon.status){ say(["No status problem to heal!"]); return; }
+    mon.status=null; G.bag[item]--; sfx.heal(); say([DEX[mon.id].n+" is refreshed!"],done);
+  } else if(item==="Revive"){
+    if(mon.hp>0){ say(["It's not fainted!"]); return; }
+    mon.hp=Math.floor(mon.maxhp/2); G.bag[item]--; sfx.heal(); say([DEX[mon.id].n+" came back to its senses!"],done);
+  }
+}
+</script>
+<script>
+"use strict";
+//////////////////// BATTLE ENGINE ////////////////////
+let BTL=null;
+function stageMult(s){ return s>=0?(2+s)/2:2/(2-s); }
+function effAtk(m){ let a=m.atk*stageMult(m.stages.atk); if(m.status==="brn")a*=0.5; return a; }
+function effDef(m){ return m.def*stageMult(m.stages.def); }
+function effSpd(m){ let s=m.spd*stageMult(m.stages.spd); if(m.status==="par")s*=0.25; return s; }
+function calcDamage(att,def,mvName){
+  const mv=MOVES[mvName], sp=DEX[att.id], spD=DEX[def.id];
+  if(mv.cat==="x") return {dmg:0,eff:1,crit:false};
+  const A=mv.cat==="p"?effAtk(att):att.spc*stageMult(0);
+  const D=mv.cat==="p"?effDef(def):def.spc;
+  const stab=sp.t.includes(mv.t)?1.5:1;
+  const eff=typeEff(mv.t,spD.t);
+  const critChance=mv.crit?0.125:0.0625;
+  const crit=Math.random()<critChance;
+  let dmg=((2*att.lvl/5+2)*mv.pow*(A/Math.max(1,D)))/50+2;
+  dmg*=stab*eff*(crit?1.5:1)*(0.85+Math.random()*0.15);
+  return {dmg:Math.max(1,Math.floor(dmg)),eff,crit};
+}
+function pickAIMove(mon,target){
+  const usable=mon.moves.filter(m=>MOVES[m]);
+  if(!usable.length) return "Tackle";
+  // prefer effective damaging moves
+  let best=null,bestScore=-1;
+  for(const m of usable){
+    const mv=MOVES[m];
+    let score=Math.random()*20;
+    if(mv.cat!=="x"){ score+=mv.pow*typeEff(mv.t,DEX[target.id].t)*(DEX[mon.id].t.includes(mv.t)?1.4:1)/2; }
+    else score+=15*Math.random();
+    if(score>bestScore){bestScore=score;best=m;}
+  }
+  return best;
+}
+function startWildBattle(foe,isLegend){
+  G.dexSeen.add(foe.id);
+  BTL={kind:"wild",foe,foeParty:[foe],foeIdx:0,myIdx:firstAlive(),
+    trainer:null,legend:!!isLegend,ui:{mode:"script"},anim:0,shakeFoe:0,shakeMe:0,ballAnim:null,
+    partTicks:0,doneCb:null};
+  beginBattle();
+}
+function startTrainerBattle(tr,tid,doneCb,music){
+  const foeParty=tr.team.map(([id,lvl])=>makeMon(id,lvl));
+  foeParty.forEach(f=>G.dexSeen.add(f.id));
+  BTL={kind:"trainer",tr,tid,foeParty,foeIdx:0,foe:foeParty[0],myIdx:firstAlive(),
+    ui:{mode:"script"},anim:0,shakeFoe:0,shakeMe:0,ballAnim:null,doneCb:doneCb||null,musicOverride:music};
+  beginBattle();
+}
+function beginBattle(){
+  G.scene="battle";
+  MUSIC.play(BTL.musicOverride||(BTL.kind==="wild"?(BTL.legend?"league":"battle"):"battle"));
+  BTL.gen=battleScript();
+  BTL.wait=null; BTL.waitData=null;
+  stepBattle();
+}
+function stepBattle(arg){
+  const r=BTL.gen.next(arg);
+  if(r.done){ return; }
+  BTL.wait=r.value;
+  if(r.value.t==="text"){ BTL.textFull=false; BTL.textChars=0; }
+  if(r.value.t==="anim"){ BTL.animT=r.value.dur||24; }
+}
+function me(){ return G.party[BTL.myIdx]; }
+function*battleScript(){
+  const B=BTL;
+  if(B.kind==="wild") yield txt(B.legend?("A legendary presence — "+DEX[B.foe.id].n+"!"):("Wild "+DEX[B.foe.id].n+" appeared!"));
+  else{
+    for(const line of (B.tr.pre||[])) yield txt(B.tr.name+": "+line);
+    yield txt(B.tr.name+" sent out "+DEX[B.foe.id].n+"!");
+  }
+  yield txt("Go, "+DEX[me().id].n+"!");
+  // main loop
+  while(true){
+    // --- player command ---
+    const cmd=yield {t:"cmd"};
+    let myAction=cmd, foeMove=pickAIMove(B.foe,me());
+    // run
+    if(cmd.a==="run"){
+      if(B.kind!=="wild"){ yield txt("Can't run from a trainer battle!"); continue; }
+      const odds=effSpd(me())>=effSpd(B.foe)?1:0.6;
+      if(Math.random()<odds){ sfx.run(); yield txt("Got away safely!"); endBattle("ran"); return; }
+      yield txt("Couldn't escape!");
+      yield* foeTurn(foeMove);
+      if(yield* checkMyFaint()) return; 
+      yield* endOfTurn(); if(yield* checkAllFaints()) return;
+      continue;
+    }
+    // bag
+    if(cmd.a==="item"){
+      const item=cmd.item;
+      if(item.includes("Ball")){
+        if(B.kind!=="wild"){ yield txt("You can't catch a trainer's Pokémon!"); continue; }
+        G.bag[item]--;
+        yield* throwBall(item);
+        if(B.caught){ endBattle("caught"); return; }
+      } else {
+        const mon=cmd.mon||me();
+        const heals={"Potion":20,"Super Potion":60,"Hyper Potion":120};
+        if(heals[item]){ mon.hp=Math.min(mon.maxhp,mon.hp+heals[item]); G.bag[item]--; sfx.heal(); yield txt(DEX[mon.id].n+"'s HP was restored!"); }
+        else if(item==="Full Heal"){ mon.status=null; G.bag[item]--; sfx.heal(); yield txt(DEX[mon.id].n+" was cured!"); }
+        else if(item==="Revive"&&mon.hp<=0){ mon.hp=Math.floor(mon.maxhp/2); G.bag[item]--; sfx.heal(); yield txt(DEX[mon.id].n+" was revived!"); }
+      }
+      yield* foeTurn(foeMove);
+      if(yield* checkMyFaint()) return;
+      yield* endOfTurn(); if(yield* checkAllFaints()) return;
+      continue;
+    }
+    // switch
+    if(cmd.a==="switch"){
+      yield txt(DEX[me().id].n+", come back!");
+      B.myIdx=cmd.idx;
+      yield txt("Go, "+DEX[me().id].n+"!");
+      yield* foeTurn(foeMove);
+      if(yield* checkMyFaint()) return;
+      yield* endOfTurn(); if(yield* checkAllFaints()) return;
+      continue;
+    }
+    // fight — speed order
+    const myMove=cmd.move;
+    const myPri=MOVES[myMove].pri||0, foePri=MOVES[foeMove].pri||0;
+    const meFirst=myPri>foePri||(myPri===foePri&&(effSpd(me())>effSpd(B.foe)||(effSpd(me())===effSpd(B.foe)&&Math.random()<0.5)));
+    if(meFirst){
+      const foeBefore=B.foeIdx;
+      yield* myTurn(myMove);
+      if(yield* checkFoeFaint()) return;
+      if(B.foeIdx===foeBefore&&B.foe.hp>0){
+        yield* foeTurn(foeMove);
+        if(yield* checkMyFaint()) return;
+      }
+    } else {
+      const meBefore=B.myIdx;
+      yield* foeTurn(foeMove);
+      if(yield* checkMyFaint()) return;
+      if(B.myIdx===meBefore&&me().hp>0){
+        yield* myTurn(myMove);
+        if(yield* checkFoeFaint()) return;
+      }
+    }
+    yield* endOfTurn();
+    if(yield* checkAllFaints()) return;
+  }
+}
+function txt(s){ return {t:"text",s}; }
+function*statusBlocks(mon,label){
+  if(mon.status==="par"&&Math.random()<0.25){ yield txt(label+" is paralyzed! It can't move!"); return true; }
+  if(mon.status==="slp"){
+    mon.slpTurns=(mon.slpTurns||1+Math.floor(Math.random()*3))-1;
+    if(mon.slpTurns>0){ yield txt(label+" is fast asleep..."); return true; }
+    mon.status=null; yield txt(label+" woke up!");
+  }
+  if(mon.status==="frz"){
+    if(Math.random()<0.2){ mon.status=null; yield txt(label+" thawed out!"); }
+    else{ yield txt(label+" is frozen solid!"); return true; }
+  }
+  return false;
+}
+function*useMove(att,def,mvName,attLabel,defLabel,isMe){
+  const mv=MOVES[mvName];
+  yield txt(attLabel+" used "+mvName+"!");
+  const acc=mv.acc||999;
+  if(Math.random()*100>acc){ yield txt("But it missed!"); return; }
+  if(mv.cat==="x"){
+    const fx=mv.fx||{};
+    if(fx.stage){
+      const [who,stat,d]=fx.stage;
+      const target=who==="self"?att:def;
+      const tl=who==="self"?attLabel:defLabel;
+      target.stages[stat]=Math.max(-6,Math.min(6,target.stages[stat]+d));
+      yield txt(tl+"'s "+({atk:"Attack",def:"Defense",spd:"Speed",spc:"Sp. power"}[stat])+(d>0?" rose!":" fell!"));
+    }
+    if(fx.status){
+      if(def.status){ yield txt("But it failed!"); }
+      else if(fx.status==="brn"&&DEX[def.id].t.includes("Fire")){ yield txt("It doesn't affect "+defLabel+"..."); }
+      else if(fx.status==="psn"&&(DEX[def.id].t.includes("Poison")||DEX[def.id].t.includes("Steel"))){ yield txt("It doesn't affect "+defLabel+"..."); }
+      else if(fx.status==="par"&&DEX[def.id].t.includes("Electric")){ yield txt("It doesn't affect "+defLabel+"..."); }
+      else{ def.status=fx.status; def.slpTurns=0; yield txt(defLabel+statusText(fx.status)); }
+    }
+    if(fx.heal){ att.hp=Math.min(att.maxhp,att.hp+Math.floor(att.maxhp*fx.heal)); sfx.heal(); yield txt(attLabel+" regained health!"); }
+    return;
+  }
+  const hits=mv.hits||1;
+  let totalDealt=0;
+  for(let h=0;h<hits;h++){
+    if(def.hp<=0) break;
+    const {dmg,eff,crit}=calcDamage(att,def,mvName);
+    if(eff===0){ yield txt("It doesn't affect "+defLabel+"..."); return; }
+    def.hp=Math.max(0,def.hp-dmg); totalDealt+=dmg;
+    if(isMe)BTL.shakeFoe=14; else BTL.shakeMe=14;
+    if(eff>1)sfx.hitSuper(); else if(eff<1)sfx.hitWeak(); else sfx.hit();
+    yield {t:"anim",dur:16};
+    if(crit) yield txt("A critical hit!");
+    if(eff>1) yield txt("It's super effective!");
+    if(eff<1) yield txt("It's not very effective...");
+  }
+  const fx=mv.fx||{};
+  if(fx.status&&def.hp>0&&!def.status&&Math.random()*100<(fx.chance||0)){
+    let ok=true;
+    if(fx.status==="brn"&&DEX[def.id].t.includes("Fire"))ok=false;
+    if(fx.status==="psn"&&(DEX[def.id].t.includes("Poison")||DEX[def.id].t.includes("Steel")))ok=false;
+    if(fx.status==="par"&&DEX[def.id].t.includes("Electric"))ok=false;
+    if(fx.status==="frz"&&DEX[def.id].t.includes("Ice"))ok=false;
+    if(ok){ def.status=fx.status; def.slpTurns=0; yield txt(defLabel+statusText(fx.status)); }
+  }
+  if(fx.stage&&def.hp>0&&Math.random()*100<(fx.chance||100)){
+    const [who,stat,d]=fx.stage;
+    const target=who==="self"?att:def, tl=who==="self"?attLabel:defLabel;
+    target.stages[stat]=Math.max(-6,Math.min(6,target.stages[stat]+d));
+    yield txt(tl+"'s "+({atk:"Attack",def:"Defense",spd:"Speed",spc:"Sp. power"}[stat])+(d>0?" rose!":" fell!"));
+  }
+  if(fx.drain&&totalDealt>0){ att.hp=Math.min(att.maxhp,att.hp+Math.max(1,Math.floor(totalDealt*fx.drain))); yield txt(attLabel+" drained energy!"); }
+  if(fx.recoil&&totalDealt>0){ att.hp=Math.max(0,att.hp-Math.floor(totalDealt*fx.recoil)); yield txt(attLabel+" was hurt by recoil!"); }
+}
+function statusText(s){ return {par:" is paralyzed!",brn:" was burned!",psn:" was poisoned!",slp:" fell asleep!",frz:" was frozen solid!"}[s]||"!"; }
+function*myTurn(mvName){
+  const m=me();
+  if(yield* statusBlocks(m,DEX[m.id].n)) return;
+  yield* useMove(m,BTL.foe,mvName,DEX[m.id].n,"the foe's "+DEX[BTL.foe.id].n,true);
+}
+function*foeTurn(mvName){
+  const f=BTL.foe;
+  if(f.hp<=0) return;
+  if(yield* statusBlocks(f,"The foe's "+DEX[f.id].n)) return;
+  yield* useMove(f,me(),mvName,"The foe's "+DEX[f.id].n,DEX[me().id].n,false);
+}
+function*endOfTurn(){
+  for(const [mon,label] of [[me(),DEX[me().id].n],[BTL.foe,"The foe's "+DEX[BTL.foe.id].n]]){
+    if(mon.hp<=0) continue;
+    if(mon.status==="psn"||mon.status==="brn"){
+      mon.hp=Math.max(0,mon.hp-Math.max(1,Math.floor(mon.maxhp/8)));
+      yield txt(label+(mon.status==="psn"?" is hurt by poison!":" is hurt by its burn!"));
+    }
+  }
+}
+function*checkFoeFaint(){
+  if(BTL.foe.hp>0) return false;
+  sfx.faint();
+  yield txt("The foe's "+DEX[BTL.foe.id].n+" fainted!");
+  // XP
+  const gain=Math.floor(DEX[BTL.foe.id].xp*BTL.foe.lvl/7*(BTL.kind==="wild"?1:1.5));
+  yield* giveXP(me(),gain);
+  // next foe?
+  if(BTL.kind!=="wild"&&BTL.foeIdx<BTL.foeParty.length-1){
+    BTL.foeIdx++; BTL.foe=BTL.foeParty[BTL.foeIdx];
+    yield txt(BTL.tr.name+" sent out "+DEX[BTL.foe.id].n+"!");
+    return false;
+  }
+  // victory
+  if(BTL.kind!=="wild"){
+    for(const line of (BTL.tr.post||[])) yield txt(BTL.tr.name+": "+line);
+    G.money+=BTL.tr.money||0; sfx.money();
+    yield txt("You got ₹"+(BTL.tr.money||0)+" for winning!");
+    if(BTL.tid) G.beaten[BTL.tid]=true;
+  }
+  yield* doEvolutions();
+  endBattle("win");
+  return true;
+}
+function*checkMyFaint(){
+  if(me().hp>0) return false;
+  sfx.faint();
+  yield txt(DEX[me().id].n+" fainted!");
+  const next=G.party.findIndex(m=>m.hp>0);
+  if(next<0){
+    yield txt("You have no usable Pokémon left!");
+    yield txt("You rushed to the nearest Pokémon Center...");
+    G.money=Math.floor(G.money/2);
+    endBattle("lose");
+    return true;
+  }
+  const pick=yield {t:"pickmon",force:true};
+  BTL.myIdx=pick;
+  yield txt("Go, "+DEX[me().id].n+"!");
+  return false;
+}
+function*checkAllFaints(){
+  if(BTL.foe.hp<=0){ if(yield* checkFoeFaint()) return true; }
+  if(me().hp<=0){ if(yield* checkMyFaint()) return true; }
+  return false;
+}
+function*giveXP(mon,gain){
+  sfx.xp();
+  yield txt(DEX[mon.id].n+" gained "+gain+" EXP!");
+  mon.xp+=gain;
+  while(mon.lvl<100&&mon.xp>=xpForLevel(mon.lvl+1)){
+    mon.lvl++;
+    recalcStats(mon); sfx.lvl();
+    yield txt(DEX[mon.id].n+" grew to level "+mon.lvl+"!");
+    // learn moves
+    for(const [l,mv] of DEX[mon.id].mv){
+      if(l===mon.lvl&&!mon.moves.includes(mv)){
+        if(mon.moves.length<4){ mon.moves.push(mv); yield txt(DEX[mon.id].n+" learned "+mv+"!"); }
+        else{
+          const ans=yield {t:"yesno",q:DEX[mon.id].n+" wants to learn "+mv+". Forget an old move?"};
+          if(ans===0){
+            const idx=yield {t:"pickmove",mon,newMove:mv};
+            if(idx>=0){ const old=mon.moves[idx]; mon.moves[idx]=mv; yield txt("1, 2 and... poof! "+DEX[mon.id].n+" forgot "+old+" and learned "+mv+"!"); }
+            else yield txt(DEX[mon.id].n+" did not learn "+mv+".");
+          } else yield txt(DEX[mon.id].n+" did not learn "+mv+".");
+        }
+      }
+    }
+    if(DEX[mon.id].evo&&mon.lvl>=DEX[mon.id].evo[0]) mon.pendingEvo=true;
+  }
+}
+function*doEvolutions(){
+  for(const mon of G.party){
+    if(mon.pendingEvo&&DEX[mon.id].evo){
+      const to=DEX[mon.id].evo[1];
+      sfx.evolve();
+      yield {t:"anim",dur:40};
+      yield txt("What? "+DEX[mon.id].n+" is evolving!");
+      const oldName=DEX[mon.id].n;
+      mon.id=to; mon.pendingEvo=false;
+      recalcStats(mon); mon.hp=Math.min(mon.maxhp,mon.hp+10);
+      G.dexSeen.add(to); G.dexCaught.add(to);
+      yield txt(oldName+" evolved into "+DEX[to].n+"!");
+      // learn evo-level moves
+      for(const [l,mv] of DEX[to].mv){
+        if(l<=mon.lvl&&!mon.moves.includes(mv)&&mon.moves.length<4){ mon.moves.push(mv); yield txt(DEX[to].n+" learned "+mv+"!"); }
+      }
+    }
+  }
+}
+function*throwBall(item){
+  const B=BTL, f=B.foe;
+  const ballMult={"Poké Ball":1,"Great Ball":1.5,"Ultra Ball":2}[item]||1;
+  yield txt("You threw a "+item+"!");
+  const statusB=f.status==="slp"||f.status==="frz"?2:(f.status?1.5:1);
+  const a=Math.min(255,(3*f.maxhp-2*f.hp)/(3*f.maxhp)*DEX[f.id].cr*ballMult*statusB);
+  const p=Math.min(1,a/255);
+  const caughtIt=Math.random()<p;
+  const shakes=caughtIt?3:Math.min(2,Math.floor(p*3+Math.random()));
+  B.ballAnim={x:0,phase:"fly"};
+  sfx.ball();
+  yield {t:"anim",dur:24};
+  for(let i=0;i<shakes;i++){ sfx.shake(); yield {t:"anim",dur:18}; yield txt("..."+("!".repeat(i+1))); }
+  if(caughtIt){
+    B.caught=true; sfx.caught();
+    yield txt("Gotcha! "+DEX[f.id].n+" was caught!");
+    G.dexCaught.add(f.id); G.dexSeen.add(f.id);
+    if(G.party.length<6){ G.party.push(f); yield txt(DEX[f.id].n+" joined your party!"); }
+    else{ G.box.push(f); yield txt(DEX[f.id].n+" was sent to the PC Box!"); }
+  } else {
+    B.ballAnim=null;
+    yield txt("Oh no! It broke free!");
+  }
+}
+function endBattle(result){
+  const B=BTL;
+  G.party.forEach(m=>{ m.stages={atk:0,def:0,spd:0}; m.pendingEvo=false; });
+  const cb=B.doneCb;
+  BTL=null;
+  if(result==="lose"){
+    healParty();
+    G.scene="world";
+    warp(G.lastHeal.map,G.lastHeal.x,G.lastHeal.y);
+  } else {
+    G.scene="world";
+    MUSIC.play(curMap().music||"town");
+  }
+  if(cb) cb(result);
+}
+//////////////////// BATTLE UI STATE MACHINE ////////////////////
+function updateBattle(){
+  const B=BTL; if(!B) return;
+  if(B.shakeFoe>0)B.shakeFoe--;
+  if(B.shakeMe>0)B.shakeMe--;
+  const w=B.wait;
+  if(!w) return;
+  if(w.t==="text"){
+    const s=w.s;
+    if(B.textChars<s.length){ B.textChars+=2; if(tapA())B.textChars=s.length; return; }
+    if(tapA()||tapB()){ stepBattle(); }
+  } else if(w.t==="anim"){
+    B.animT--; if(B.animT<=0){ if(B.ballAnim&&B.ballAnim.phase==="fly")B.ballAnim.phase="sit"; stepBattle(); }
+  } else if(w.t==="cmd"){
+    updateBattleMenu();
+  } else if(w.t==="pickmon"){
+    updateBattleParty(w);
+  } else if(w.t==="yesno"){
+    if(!B.ynIdx)B.ynIdx=0;
+    if(tapped("arrowup")||tapped("arrowdown")){B.ynIdx=1-B.ynIdx;sfx.sel();}
+    if(tapA()){const i=B.ynIdx;B.ynIdx=0;sfx.ok();stepBattle(i);}
+    if(tapB()){B.ynIdx=0;sfx.no();stepBattle(1);}
+  } else if(w.t==="pickmove"){
+    if(B.pmIdx===undefined)B.pmIdx=0;
+    const len=w.mon.moves.length;
+    if(tapped("arrowdown")){B.pmIdx=(B.pmIdx+1)%len;sfx.sel();}
+    if(tapped("arrowup")){B.pmIdx=(B.pmIdx+len-1)%len;sfx.sel();}
+    if(tapA()){const i=B.pmIdx;B.pmIdx=undefined;sfx.ok();stepBattle(i);}
+    if(tapB()){B.pmIdx=undefined;sfx.no();stepBattle(-1);}
+  }
+}
+function updateBattleMenu(){
+  const B=BTL;
+  if(!B.menu)B.menu={kind:"main",idx:0};
+  const m=B.menu;
+  if(m.kind==="main"){
+    if(tapped("arrowright"))m.idx=m.idx%2===0?m.idx+1:m.idx;
+    if(tapped("arrowleft"))m.idx=m.idx%2===1?m.idx-1:m.idx;
+    if(tapped("arrowdown"))m.idx=m.idx<2?m.idx+2:m.idx;
+    if(tapped("arrowup"))m.idx=m.idx>=2?m.idx-2:m.idx;
+    if(tapA()){
+      sfx.ok();
+      if(m.idx===0){ m.kind="fight"; m.fIdx=0; }
+      else if(m.idx===1){ m.kind="bag"; m.bIdx=0; }
+      else if(m.idx===2){ m.kind="party"; m.pIdx=0; }
+      else{ B.menu=null; stepBattle({a:"run"}); }
+    }
+  } else if(m.kind==="fight"){
+    const mv=me().moves, len=mv.length;
+    if(tapped("arrowdown"))m.fIdx=(m.fIdx+1)%len;
+    if(tapped("arrowup"))m.fIdx=(m.fIdx+len-1)%len;
+    if(tapB()){ m.kind="main"; sfx.no(); return; }
+    if(tapA()){ const move=mv[m.fIdx]; B.menu=null; sfx.ok(); stepBattle({a:"fight",move}); }
+  } else if(m.kind==="bag"){
+    const items=Object.keys(G.bag).filter(k=>G.bag[k]>0);
+    if(!items.length){ if(tapA()||tapB()){m.kind="main";} return; }
+    if(m.bIdx>=items.length)m.bIdx=items.length-1;
+    if(tapped("arrowdown"))m.bIdx=(m.bIdx+1)%items.length;
+    if(tapped("arrowup"))m.bIdx=(m.bIdx+items.length-1)%items.length;
+    if(tapB()){ m.kind="main"; sfx.no(); return; }
+    if(tapA()){
+      const item=items[m.bIdx]; sfx.ok();
+      if(item==="Revive"||item.includes("Potion")||item==="Full Heal"){ m.kind="party"; m.pIdx=0; m.useItem=item; }
+      else{ B.menu=null; stepBattle({a:"item",item}); }
+    }
+  } else if(m.kind==="party"){
+    const len=G.party.length;
+    if(tapped("arrowdown"))m.pIdx=(m.pIdx+1)%len;
+    if(tapped("arrowup"))m.pIdx=(m.pIdx+len-1)%len;
+    if(tapB()){ m.kind="main"; m.useItem=null; sfx.no(); return; }
+    if(tapA()){
+      const mon=G.party[m.pIdx];
+      if(m.useItem){
+        const it=m.useItem; m.useItem=null; B.menu=null; sfx.ok();
+        stepBattle({a:"item",item:it,mon});
+      } else {
+        if(m.pIdx===B.myIdx){ sfx.no(); return; }
+        if(mon.hp<=0){ sfx.no(); return; }
+        const idx=m.pIdx; B.menu=null; sfx.ok();
+        stepBattle({a:"switch",idx});
+      }
+    }
+  }
+}
+function updateBattleParty(w){
+  const B=BTL;
+  if(B.fpIdx===undefined)B.fpIdx=firstAlive();
+  const len=G.party.length;
+  if(tapped("arrowdown")){B.fpIdx=(B.fpIdx+1)%len;sfx.sel();}
+  if(tapped("arrowup")){B.fpIdx=(B.fpIdx+len-1)%len;sfx.sel();}
+  if(tapA()){
+    const mon=G.party[B.fpIdx];
+    if(mon.hp<=0){sfx.no();return;}
+    const i=B.fpIdx; B.fpIdx=undefined; sfx.ok(); stepBattle(i);
+  }
+}
+</script>
+<script>
+"use strict";
+//////////////////// STORY WIRING ////////////////////
+// Beach grunts (Team Dhuan plastic dumping)
+MAPS.sonabeach.trainers.push(
+ {x:17,y:5,d:2,los:3,name:"Dhuan Grunt",team:[[50,20],[49,21]],money:900,
+  pre:["What? It's just a LITTLE plastic. The sea's big, it can take it!"],post:["Fine, FINE, we'll haul it back. Sheesh."]},
+ {x:21,y:9,d:2,los:3,name:"Dhuan Grunt",team:[[52,21],[50,20]],money:900,
+  pre:["Team Dhuan's motto: out of sight, out of mind, into the ocean!"],post:["New motto needed..."]});
+// Boss Raakh atop Dhuan Works
+MAPS.dhuanworks.trainers.push(
+ {x:18,y:1,d:0,los:3,name:"Boss Raakh",team:[[53,44],[45,43],[35,44],[16,43]],money:6000,
+  pre:["So. The child who keeps opening windows in my beautiful, profitable haze.",
+       "I am Raakh. I sell the sky. Clean air on subscription — brilliant, no?",
+       "The Great Furnace is lit. Dhuasur stirs. And you... are out of time."],
+  post:["The Furnace... someone's shut the intake... YOU shut the intake?!","...Dhuasur is awake. And it is NOT loyal. RUN, child."]});
+function afterBattleHooks(tid){
+  // beach cleanup complete
+  if(!G.flags.dhuan_beach&&G.beaten["sonabeach:17,5"]&&G.beaten["sonabeach:21,9"]){
+    G.flags.dhuan_beach=true;
+    say(["The grunts drag their plastic mountain off the sand.","Zoya (from the gym window): OI! GOOD WORK! Come get your gym battle!","The Konkan Way north is open."]);
+  }
+  if(tid==="dhuanworks:18,1"&&!G.flags.dhuan_factory){
+    say(["The Great Furnace shudders. The smokestacks cough... and fall silent.",
+         "Above the factory roof, the smog gathers itself into a shape with burning eyes...",
+         "DHUASUR descends, hissing like a dying engine!"],()=>{
+      const d=makeMon(69,48);
+      startWildBattle(d,true);
+      BTL.doneCb=(res)=>{
+        G.flags.dhuan_factory=true;
+        if(res==="caught") say(["Dhuasur was caught! The smog thins as its rage cools.","The Himalayan Pass is clear. Himadri City awaits — and beyond it, the League."]);
+        else say(["Dhuasur dissolves into the wind, scattered — for now.","The smog thins. The Himalayan Pass is clear!","The mountain air tastes like... air. Wonderful, ordinary air."]);
+      };
+    });
+  }
+}
+//////////////////// GYM / DOORS / LEAGUE ////////////////////
+function enterGym(){
+  const gi=curMap().gym;
+  if(gi===undefined){ say(["It's locked."]); return; }
+  const g=GYMS[gi];
+  if(G.badges[gi]){ say([g.leader+": The "+g.badge+" suits you. Go make it proud."]); return; }
+  ask(g.leader+"'s Gym — "+g.type+" type. Challenge the leader?",["Bring it on!","Not yet"],ci=>{
+    if(ci!==0) return;
+    startTrainerBattle({name:"Leader "+g.leader,team:g.team,money:g.money,pre:g.pre,post:g.post},null,(res)=>{
+      if(res==="win"){
+        G.badges[gi]=true; sfx.badge();
+        say(["You received the "+g.badge+" from "+g.leader+"!",
+             gi<7?"Your Pokémon up to level "+((gi+2)*10>80?80:20+gi*5)+" will respect you better. Probably.":"All eight badges shine on your case. VICTORY ROAD AWAITS."]);
+      }
+    },"gym");
+  });
+}
+function storyDoor(){
+  const kind=(curMap().doorD||{}).kind;
+  if(kind==="lab"){
+    if(!G.flags.starter){ startIntroLab(); return; }
+    say(["Prof. Neem: How's the journey? The dex data you're gathering is priceless.",
+         "Prof. Neem: Remember — badges open roads. Kindness opens everything else."]);
+  } else if(kind==="tech"){
+    if(!G.flags.dhuan_lab){
+      say(["Inside the data lab, a man in grey stuffs drives into a sack...",
+           "Dhuan Grunt: Emission records? Air quality data? The boss says if there's no DATA, there's no PROBLEM! Ha!"],()=>{
+        startTrainerBattle({name:"Dhuan Grunt",team:[[50,15],[52,16]],money:800,
+          pre:["Out of my way, kid, or eat smoke!"],post:["Keep your stupid data! Achoo!"]},null,(res)=>{
+          if(res==="win"){ G.flags.dhuan_lab=true;
+            say(["The grunt flees, dropping the drives.","Researcher: They wanted to erase the smog records... who does that help?","Researcher: 'Team Dhuan', the grunt kept saying. Remember that name.","You received 3 Great Balls!"]);
+            G.bag["Great Ball"]=(G.bag["Great Ball"]||0)+3;
+          }
+        },"evil");
+      });
+    } else say(["Researcher: Data's safe, thanks to you. Backups in three cities now!"]);
+  } else if(kind==="hq"){
+    say(["DHUAN WORKS — CORPORATE OFFICE. 'The Smell of Progress™'.",
+         "The receptionist smiles with zero warmth: 'The chairman is at our mountain facility.'",
+         "A brochure shows a factory on the Himalayan Pass, north of Chai Hills."]);
+  } else if(kind==="ghat"){
+    if(!G.flags.dhuan_ganga){
+      say(["On the ghats, a crowd surrounds a grey-suited woman by a fat pipe gushing sludge...",
+           "Admin Dhundh: It's PROCESSED sludge. Premium sludge! The river should be grateful.",
+           "Kashvi: The river remembers everything, smoke-peddler. Challenger — help me here!"],()=>{
+        startTrainerBattle({name:"Admin Dhundh",team:[[49,32],[52,33],[51,34]],money:3000,
+          pre:["Ugh, fine. I'll deal with the child myself."],post:["My suit... my SLUDGE... this quarter is ruined."]},null,(res)=>{
+          if(res==="win"){ G.flags.dhuan_ganga=true;
+            say(["Workers cap the pipe. The crowd cheers. Somewhere, a Susurin sings.",
+                 "Kashvi: The spirits are pleased. Come to my gym — bring that same fire.",
+                 "The Teesta Trail east is open."]);
+          }
+        },"evil");
+      });
+    } else say(["The pipe is capped and painted with flowers. The ghats glow brighter tonight."]);
+  } else if(kind==="factory"){
+    ask("DHUAN WORKS — MOUNTAIN FACILITY. Enter?",["Enter","Leave"],ci=>{
+      if(ci===0) warp("dhuanworks",10,13);
+    });
+  } else if(kind==="spire"){
+    const opts=["Meghdoot Spire"+(G.badges[7]?"":" (need Glacier Badge)")];
+    if(G.flags.champion) opts.push("Him-Gufa (deep cave)");
+    opts.push("Leave");
+    ask("Two paths wind up from the shrine gate.",opts,ci=>{
+      if(ci===0){ if(G.badges[7]) warp("meghdoot",7,7); else say(["The storm winds refuse you. Eight badges first."]); }
+      else if(ci===1&&G.flags.champion) warp("himgufa",7,6);
+    });
+  } else if(kind==="league"){
+    if(G.flags.champion){ say(["Attendant: Welcome back, CHAMPION. Your hall of fame record stands proud."]); return; }
+    ask("THE INDRAPRASTHA LEAGUE. Four Elites, then the Champion. Once you start, no turning back. Ready?",["Challenge!","Not yet"],ci=>{
+      if(ci!==0) return;
+      runLeague(0);
+    });
+  } else say(["It's locked."]);
+}
+function championTeam(){
+  const counter={0:3,3:6,6:0}[G.starterId]??3; // rival picked your counter
+  const evolved={0:2,3:5,6:8}[counter];
+  return [[35,52],[67,52],[23,53],[61,53],[65,54],[evolved,55]];
+}
+function runLeague(stage){
+  healParty();
+  if(stage<4){
+    const e=ELITE[stage];
+    say(["— HALL "+(stage+1)+" of 4 —","Your team has been fully restored."],()=>{
+      startTrainerBattle({name:e.name,team:e.team,money:e.money,pre:e.pre,post:e.post},null,(res)=>{
+        if(res==="win") runLeague(stage+1);
+      },"league");
+    });
+  } else {
+    say(["— THE CHAMPION'S HALL —","Your team has been fully restored.","A familiar figure waits on the dais..."],()=>{
+      startTrainerBattle({name:CHAMPION.name,team:championTeam(),money:CHAMPION.money,pre:CHAMPION.pre,post:CHAMPION.post},null,(res)=>{
+        if(res==="win"){
+          G.flags.champion=true; sfx.badge(); MUSIC.play("ending");
+          say(["★ ★ ★ HALL OF FAME ★ ★ ★",
+               "Your team's names are carved on the plateau of the first kings.",
+               "Prof. Neem (by videocall): You did it!! The whole region is watching! Even the Susurin are doing flips!",
+               "Kiran: Go on, Champion. The region's yours to wander. I hear the snows past Route 9 hide something white and impossible...",
+               "POSTGAME UNLOCKED — Him-Gufa cave (Route 9 shrine gate) and rematches await. Thank you for playing POKÉMON BHARATVA!"]);
+          saveGame();
+        }
+      },"league");
+    });
+  }
+}
+//////////////////// INTRO / STARTER ////////////////////
+const STARTERS=[0,3,6];
+let starterSel=1;
+function startIntroLab(){
+  G.scene="starter"; starterSel=1;
+  say(["Prof. Neem: Ah! There you are! Come in, come in — mind the Keedler terrarium.",
+       "Prof. Neem: I study the bonds between people and Pokémon across Bharatva.",
+       "Prof. Neem: You and Kiran are ready for your own journey. And every journey starts with a friend.",
+       "Prof. Neem: Choose — the peachick PAVLING, the tiger cub SHERVI, or the gharial GHARPUP."]);
+}
+function updateStarter(){
+  if(DLG.active){ updateDialog(); return; }
+  if(tapped("arrowleft")){ starterSel=(starterSel+2)%3; sfx.sel(); }
+  if(tapped("arrowright")){ starterSel=(starterSel+1)%3; sfx.sel(); }
+  if(tapA()){
+    const id=STARTERS[starterSel];
+    ask("Choose "+DEX[id].n+", the "+DEX[id].t.join("/")+" type?",["Yes!","Let me think"],ci=>{
+      if(ci!==0) return;
+      G.starterId=id;
+      G.party=[makeMon(id,5)];
+      G.dexSeen.add(id); G.dexCaught.add(id);
+      G.flags.starter=true;
+      sfx.caught();
+      const rid={0:3,3:6,6:0}[id];
+      say([DEX[id].n+" hops into your arms! Partner acquired!",
+           "Kiran: Then I'll take "+DEX[rid].n+" — heh, type advantage, nothing personal.",
+           "Kiran: C'mon, inaugural battle! Right here! Prof, hold my chai!"],()=>{
+        startTrainerBattle({name:"Rival Kiran",team:[[rid,5]],money:500,
+          pre:["Don't cry when you lose!"],post:["WHAT. Okay. Okay okay okay. This means NOTHING."]},null,(res)=>{
+          G.scene="world";
+          say(["Prof. Neem: Wonderful! Here — 5 Poké Balls and a Pokédex module for your phone.",
+               "Prof. Neem: Head north up Route 1 to Malabar Town. Gym Leader Meera is an old student of mine.",
+               "Prof. Neem: Eight badges open Victory Road. But keep your eyes open — grey-suited men have been asking odd questions...",
+               "Kiran: Race you to the League! Try to keep up!"]);
+          G.bag["Poké Ball"]=(G.bag["Poké Ball"]||0)+5;
+        },"battle");
+      });
+    });
+  }
+}
+//////////////////// RENDERING — WORLD ////////////////////
+function camera(){
+  const m=curMap();
+  let cx=(G.px+ (G.moving>0?G.mx*(1-G.moving):0))*TS+TS/2-cv.width/2;
+  let cy=(G.py+ (G.moving>0?G.my*(1-G.moving):0))*TS+TS/2-cv.height/2;
+  cx=Math.max(0,Math.min(cx,m.w*TS-cv.width));
+  cy=Math.max(0,Math.min(cy,m.h*TS-cv.height));
+  if(m.w*TS<cv.width)cx=(m.w*TS-cv.width)/2;
+  if(m.h*TS<cv.height)cy=(m.h*TS-cv.height)/2;
+  return [cx,cy];
+}
+function drawTile(t,x,y,p,tx,ty){
+  switch(t){
+    case ".": case ":": ctx.fillStyle=((tx+ty)%2)?p.gr:p.gr2; ctx.fillRect(x,y,TS,TS); break;
+    case ",": case "_": ctx.fillStyle=p.path; ctx.fillRect(x,y,TS,TS);
+      ctx.fillStyle="rgba(0,0,0,.06)"; if(t==="_"){ctx.fillRect(x,y+TS/2-2,TS,4);} break;
+    case "S": ctx.fillStyle=p.path; ctx.fillRect(x,y,TS,TS);
+      ctx.fillStyle="rgba(255,255,255,.15)"; ctx.fillRect(x+8,y+10,4,4); ctx.fillRect(x+30,y+30,4,4); break;
+    case "i": ctx.fillStyle=p.gr; ctx.fillRect(x,y,TS,TS);
+      ctx.fillStyle="rgba(160,190,220,.3)"; ctx.fillRect(x+((tx*7)%30),y+((ty*11)%30),5,3); break;
+    case "d": ctx.fillStyle=p.gr; ctx.fillRect(x,y,TS,TS);
+      ctx.fillStyle="rgba(0,0,0,.12)"; ctx.fillRect(x+((tx*13)%28),y+((ty*7)%28),6,4); break;
+    case "~": ctx.fillStyle=((tx+ty)%2)?p.gr:p.gr2; ctx.fillRect(x,y,TS,TS);
+      ctx.fillStyle=p.flower; ctx.beginPath(); ctx.arc(x+TS/2,y+TS/2,6,0,7); ctx.fill();
+      ctx.fillStyle="#f8e050"; ctx.beginPath(); ctx.arc(x+TS/2,y+TS/2,2.5,0,7); ctx.fill(); break;
+    case "G": ctx.fillStyle=p.gr2; ctx.fillRect(x,y,TS,TS);
+      ctx.fillStyle=p.tall;
+      for(let i=0;i<3;i++){ const gx=x+6+i*14, sway=Math.sin(tick*0.05+tx+i)*2;
+        ctx.beginPath(); ctx.moveTo(gx,y+TS-4); ctx.quadraticCurveTo(gx+3+sway,y+16,gx+6+sway,y+8);
+        ctx.quadraticCurveTo(gx+8+sway,y+16,gx+12,y+TS-4); ctx.fill(); }
+      break;
+    case "W": { ctx.fillStyle=p.water; ctx.fillRect(x,y,TS,TS);
+      ctx.fillStyle="rgba(255,255,255,.25)";
+      const w=Math.sin(tick*0.06+tx*1.3+ty*0.7);
+      if(w>0.3) ctx.fillRect(x+8,y+14+w*6,22,3);
+      break; }
+    case "B": ctx.fillStyle="#b8905a"; ctx.fillRect(x,y,TS,TS);
+      ctx.fillStyle="#8a6838"; ctx.fillRect(x,y+6,TS,3); ctx.fillRect(x,y+TS-9,TS,3); break;
+    case "T": ctx.fillStyle=p.gr2; ctx.fillRect(x,y,TS,TS);
+      ctx.fillStyle="#6a4828"; ctx.fillRect(x+TS/2-4,y+26,8,16);
+      ctx.fillStyle=p.tree; ctx.beginPath(); ctx.arc(x+TS/2,y+18,15,0,7); ctx.fill();
+      ctx.fillStyle=p.treeT; ctx.beginPath(); ctx.arc(x+TS/2-5,y+13,9,0,7); ctx.fill(); break;
+    case "p": ctx.fillStyle=p.gr; ctx.fillRect(x,y,TS,TS);
+      ctx.strokeStyle="#8a6838"; ctx.lineWidth=5; ctx.beginPath(); ctx.moveTo(x+TS/2,y+TS-4); ctx.quadraticCurveTo(x+TS/2+4,y+22,x+TS/2,y+12); ctx.stroke();
+      ctx.strokeStyle=p.tree; ctx.lineWidth=4; ctx.lineCap="round";
+      for(let i=0;i<5;i++){ const a=i*1.25-2.5; ctx.beginPath(); ctx.moveTo(x+TS/2,y+12); ctx.quadraticCurveTo(x+TS/2+Math.cos(a)*14,y+6+Math.sin(a)*4,x+TS/2+Math.cos(a)*20,y+12+Math.sin(a)*8); ctx.stroke(); }
+      break;
+    case "M": case "^": ctx.fillStyle=p.rock; ctx.fillRect(x,y,TS,TS);
+      ctx.fillStyle="rgba(255,255,255,.15)"; ctx.beginPath(); ctx.moveTo(x+4,y+TS); ctx.lineTo(x+TS/2,y+8); ctx.lineTo(x+TS-4,y+TS); ctx.fill();
+      ctx.fillStyle="rgba(0,0,0,.15)"; ctx.fillRect(x,y+TS-6,TS,6); break;
+    case "R": ctx.fillStyle=((tx+ty)%2)?p.gr:p.gr2; ctx.fillRect(x,y,TS,TS);
+      ctx.fillStyle=p.rock; ctx.beginPath(); ctx.arc(x+TS/2,y+TS/2+4,14,0,7); ctx.fill();
+      ctx.fillStyle="rgba(255,255,255,.2)"; ctx.beginPath(); ctx.arc(x+TS/2-4,y+TS/2,5,0,7); ctx.fill(); break;
+    case "s": ctx.fillStyle=p.path; ctx.fillRect(x,y,TS,TS);
+      ctx.fillStyle="rgba(0,0,0,.12)"; ctx.beginPath(); ctx.arc(x+TS/2,y+TS/2+6,15,Math.PI,0); ctx.fill(); break;
+    case "F": ctx.fillStyle=((tx+ty)%2)?p.gr:p.gr2; ctx.fillRect(x,y,TS,TS);
+      ctx.fillStyle=p.fence; ctx.fillRect(x+4,y+14,6,26); ctx.fillRect(x+28,y+14,6,26); ctx.fillRect(x,y+20,TS,6); break;
+    case "H": ctx.fillStyle=p.wall; ctx.fillRect(x,y+14,TS,TS-14);
+      ctx.fillStyle=p.roof; ctx.fillRect(x-1,y,TS+2,18);
+      ctx.fillStyle="rgba(0,0,0,.2)"; ctx.fillRect(x+8,y+26,10,12);
+      break;
+    case "#": ctx.fillStyle=p.wall; ctx.fillRect(x,y,TS,TS);
+      ctx.strokeStyle="rgba(0,0,0,.25)"; ctx.lineWidth=2; ctx.strokeRect(x+2,y+2,TS-4,TS-4); break;
+    case "!": ctx.fillStyle=((tx+ty)%2)?p.gr:p.gr2; ctx.fillRect(x,y,TS,TS);
+      ctx.fillStyle="#8a6838"; ctx.fillRect(x+TS/2-3,y+22,6,18);
+      ctx.fillStyle="#c8a868"; ctx.fillRect(x+8,y+10,TS-16,16);
+      ctx.strokeStyle="#6a4818"; ctx.lineWidth=2; ctx.strokeRect(x+8,y+10,TS-16,16); break;
+    case "C": case "m": case "Y": case "D": {
+      ctx.fillStyle=p.wall; ctx.fillRect(x,y,TS,TS);
+      const col=t==="C"?"#e05858":t==="m"?"#4878d8":t==="Y"?"#c8a030":"#5a5468";
+      ctx.fillStyle=col; ctx.fillRect(x,y,TS,12);
+      ctx.fillStyle="#4a4048"; ctx.fillRect(x+10,y+18,TS-20,TS-18);
+      ctx.fillStyle=col;
+      if(t==="C"){ ctx.fillRect(x+TS/2-2,y+20,4,12); ctx.fillRect(x+TS/2-6,y+24,12,4); }
+      if(t==="m"){ ctx.fillRect(x+TS/2-6,y+22,12,9); }
+      if(t==="Y"){ ctx.beginPath(); ctx.arc(x+TS/2,y+27,5,0,7); ctx.fill(); }
+      break; }
+    case "E": ctx.fillStyle=p.path; ctx.fillRect(x,y,TS,TS); break;
+    default: ctx.fillStyle=p.gr; ctx.fillRect(x,y,TS,TS);
+  }
+}
+function drawChar(x,y,dir,walk,palette){
+  // GBA-style small character. palette {skin,shirt,pant,hat}
+  const P=palette;
+  const step=walk?Math.sin(tick*0.35)*3:0;
+  ctx.save(); ctx.translate(x+TS/2,y+TS/2+6);
+  // feet
+  ctx.fillStyle=P.pant;
+  ctx.fillRect(-8,8+ (step>0?-2:0),6,8); ctx.fillRect(2,8+(step<0?-2:0),6,8);
+  // body
+  ctx.fillStyle=P.shirt; ctx.fillRect(-9,-6,18,16);
+  // arms
+  ctx.fillStyle=P.skin; ctx.fillRect(-12,-2,4,9); ctx.fillRect(8,-2,4,9);
+  // head
+  ctx.fillStyle=P.skin; ctx.beginPath(); ctx.arc(0,-14,10,0,7); ctx.fill();
+  // hair/hat
+  ctx.fillStyle=P.hat; ctx.beginPath(); ctx.arc(0,-16,10,Math.PI,0); ctx.fill(); ctx.fillRect(-10,-17,20,4);
+  // face by dir
+  ctx.fillStyle="#2a2020";
+  if(dir===0){ ctx.fillRect(-5,-13,3,4); ctx.fillRect(2,-13,3,4); }
+  else if(dir===2){ ctx.fillRect(-7,-13,3,4); }
+  else if(dir===3){ ctx.fillRect(4,-13,3,4); }
+  ctx.restore();
+}
+const PLAYER_PAL={skin:"#e8b088",shirt:"#d84838",pant:"#3a4a8a",hat:"#2a2a30"};
+function npcPal(name){
+  let h=0; for(const c of name) h=(h*31+c.charCodeAt(0))%360;
+  return {skin:"#e0a878",shirt:"hsl("+h+",55%,45%)",pant:"#4a4458",hat:"hsl("+((h+120)%360)+",45%,30%)"};
+}
+function drawWorld(){
+  const m=curMap(), p=PAL[m.pal];
+  const [cx,cy]=camera();
+  ctx.fillStyle="#0a0a14"; ctx.fillRect(0,0,cv.width,cv.height);
+  const x1=Math.floor(cx/TS), y1=Math.floor(cy/TS), x2=Math.ceil((cx+cv.width)/TS), y2=Math.ceil((cy+cv.height)/TS);
+  for(let ty=y1;ty<=y2;ty++)for(let tx=x1;tx<=x2;tx++){
+    drawTile(tileOf(m,tx,ty),tx*TS-cx,ty*TS-cy,p,tx,ty);
+  }
+  // blocks (guards)
+  for(const b of m.blocks) if(blockActive(b)) drawChar(b.x*TS-cx,b.y*TS-cy,0,false,{skin:"#e0a878",shirt:"#c87828",pant:"#4a4458",hat:"#8a5a28"});
+  // npcs
+  for(const n of m.npcs) drawChar(n.x*TS-cx,n.y*TS-cy,n.d||0,false,npcPal(n.name));
+  // trainers
+  for(const tr of m.trainers){
+    const tid=G.map+":"+tr.x+","+tr.y;
+    const pal=tr.name.includes("Dhuan")||tr.name.includes("Raakh")?{skin:"#e0a878",shirt:"#585860",pant:"#3a3a42",hat:"#585860"}:npcPal(tr.name);
+    drawChar(tr.x*TS-cx,tr.y*TS-cy,tr.d,false,pal);
+    if(!G.beaten[tid]){ ctx.fillStyle="#fff"; ctx.font="bold 16px 'Trebuchet MS'"; ctx.textAlign="center";
+      ctx.fillText("!",tr.x*TS-cx+TS/2,tr.y*TS-cy-2); }
+  }
+  // legendary
+  if(m.legendary&&!G.flags[m.legendary.flag]){
+    drawMon(ctx,DEX[m.legendary.id],m.legendary.x*TS-cx+TS/2,m.legendary.y*TS-cy+TS-4,44,false,tick);
+  }
+  // player
+  const px=(G.px+(G.moving>0?G.mx*(1-G.moving):0))*TS-cx;
+  const py=(G.py+(G.moving>0?G.my*(1-G.moving):0))*TS-cy;
+  drawChar(px,py,G.dir,G.moving>0,PLAYER_PAL);
+  // location chip
+  ctx.fillStyle="rgba(20,16,40,.72)"; rr2(10,10,ctx.measureText(m.name).width+150,34,8); ctx.fill();
+  ctx.fillStyle="#f8e8b8"; ctx.font="bold 17px 'Trebuchet MS'"; ctx.textAlign="left";
+  ctx.fillText(m.name,24,33);
+  ctx.fillStyle="#c8b888"; ctx.font="13px 'Trebuchet MS'";
+  ctx.fillText("₹"+G.money,ctx.measureText(m.name).width+66,32);
+}
+//////////////////// RENDERING — MENUS ////////////////////
+function drawPanel(x,y,w,h){
+  ctx.fillStyle="#f8f4e8"; rr2(x,y,w,h,10); ctx.fill();
+  ctx.strokeStyle="#4a4088"; ctx.lineWidth=4; rr2(x+3,y+3,w-6,h-6,8); ctx.stroke();
+}
+function drawMenus(){
+  if(!MENU.open) return;
+  const t=menuTop(); if(!t) return;
+  ctx.font="bold 18px 'Trebuchet MS'"; ctx.textAlign="left";
+  if(t.kind==="main"){
+    const items=["POKÉMON","BAG","POKÉDEX","BADGES","SAVE","EXIT"];
+    drawPanel(cv.width-210,12,196,items.length*38+22);
+    items.forEach((it,i)=>{
+      ctx.fillStyle=i===t.idx?"#c05838":"#2a2440";
+      ctx.fillText((i===t.idx?"▶ ":"  ")+it,cv.width-190,44+i*38);
+    });
+  } else if(t.kind==="party"||t.kind==="box"){
+    const isBox=t.kind==="box";
+    const list=isBox?(t.mode==="withdraw"?G.box:G.party):G.party;
+    drawPanel(30,24,cv.width-60,cv.height-60);
+    ctx.fillStyle="#2a2440"; ctx.font="bold 20px 'Trebuchet MS'";
+    ctx.fillText(isBox?("PC BOX — "+t.mode.toUpperCase()+" (←/→ switch)"):(t.mode==="swap"?"Swap with?":t.mode==="useitem"?"Use "+t.item+" on?":"PARTY"),50,56);
+    ctx.font="bold 17px 'Trebuchet MS'";
+    const n=isBox?list.length+1:list.length;
+    for(let i=0;i<n;i++){
+      const y=86+i*52;
+      const sel=i===t.idx;
+      if(sel){ ctx.fillStyle="rgba(192,88,56,.15)"; rr2(44,y-24,cv.width-128,44,8); ctx.fill(); }
+      if(isBox&&i===list.length){ ctx.fillStyle=sel?"#c05838":"#2a2440"; ctx.fillText("CLOSE",96,y); continue; }
+      const mon=list[i];
+      drawMon(ctx,DEX[mon.id],76,y+14,34,false,tick);
+      ctx.fillStyle=sel?"#c05838":"#2a2440";
+      ctx.fillText(DEX[mon.id].n+"  Lv"+mon.lvl,104,y-2);
+      // hp bar
+      const bw=180;
+      ctx.fillStyle="#c8c0a8"; rr2(104,y+4,bw,10,5); ctx.fill();
+      const r=mon.hp/mon.maxhp;
+      ctx.fillStyle=r>0.5?"#48b048":r>0.2?"#e8b830":"#d84838";
+      if(r>0) { rr2(104,y+4,bw*r,10,5); ctx.fill(); }
+      ctx.fillStyle="#68607a"; ctx.font="14px 'Trebuchet MS'";
+      ctx.fillText(mon.hp+"/"+mon.maxhp+(mon.status?"  ["+mon.status.toUpperCase()+"]":""),300,y+13);
+      ctx.font="bold 17px 'Trebuchet MS'";
+    }
+  } else if(t.kind==="summary"){
+    const mon=t.mon, sp=DEX[mon.id];
+    drawPanel(60,30,cv.width-120,cv.height-72);
+    drawMon(ctx,sp,170,190,110,false,tick);
+    ctx.fillStyle="#2a2440"; ctx.font="bold 24px 'Trebuchet MS'";
+    ctx.fillText(sp.n+"  Lv"+mon.lvl,280,80);
+    sp.t.forEach((ty,i)=>{
+      ctx.fillStyle=TYPE_COLOR[ty]; rr2(280+i*94,94,86,26,13); ctx.fill();
+      ctx.fillStyle="#fff"; ctx.font="bold 14px 'Trebuchet MS'"; ctx.textAlign="center";
+      ctx.fillText(ty.toUpperCase(),323+i*94,112); ctx.textAlign="left";
+    });
+    ctx.fillStyle="#2a2440"; ctx.font="bold 16px 'Trebuchet MS'";
+    const st=[["HP",mon.hp+"/"+mon.maxhp],["ATK",mon.atk],["DEF",mon.def],["SPD",mon.spd],["SPC",mon.spc],["EXP",mon.xp],["Next",xpForLevel(mon.lvl+1)]];
+    st.forEach(([k,v],i)=>{ ctx.fillText(k,280,150+i*26); ctx.fillText(String(v),360,150+i*26); });
+    ctx.fillText("MOVES",490,150);
+    mon.moves.forEach((mv,i)=>{
+      const d=MOVES[mv];
+      ctx.fillStyle=TYPE_COLOR[d.t]; rr2(490,162+i*30,10,18,4); ctx.fill();
+      ctx.fillStyle="#2a2440"; ctx.fillText(mv,508,177+i*30);
+    });
+    ctx.font="14px 'Trebuchet MS'"; ctx.fillStyle="#68607a";
+    wrapText(sp.dex,130,330,cv.width-260,20);
+  } else if(t.kind==="bag"){
+    const items=Object.keys(G.bag).filter(k=>G.bag[k]>0);
+    drawPanel(cv.width-300,12,286,Math.max(1,items.length)*34+60);
+    ctx.fillStyle="#2a2440"; ctx.font="bold 19px 'Trebuchet MS'"; ctx.fillText("BAG  (₹"+G.money+")",cv.width-278,42);
+    ctx.font="bold 17px 'Trebuchet MS'";
+    if(!items.length) ctx.fillText("Empty!",cv.width-278,76);
+    items.forEach((it,i)=>{
+      ctx.fillStyle=i===t.idx?"#c05838":"#2a2440";
+      ctx.fillText((i===t.idx?"▶ ":"  ")+it+" ×"+G.bag[it],cv.width-278,74+i*34);
+    });
+  } else if(t.kind==="dex"){
+    drawPanel(40,24,cv.width-80,cv.height-60);
+    ctx.fillStyle="#2a2440"; ctx.font="bold 20px 'Trebuchet MS'";
+    ctx.fillText("BHARATVA POKÉDEX — seen "+G.dexSeen.size+" / caught "+G.dexCaught.size+" of "+DEX.length,64,56);
+    ctx.font="13px 'Trebuchet MS'";
+    const cols=4, cw=(cv.width-140)/cols;
+    DEX.forEach((sp,i)=>{
+      const col=i%cols, rowI=Math.floor(i/cols);
+      const x=64+col*cw, y=84+rowI*20;
+      const caught=G.dexCaught.has(i), seen=G.dexSeen.has(i);
+      ctx.fillStyle=caught?"#2a2440":seen?"#8a82a0":"#c8c0b0";
+      ctx.fillText((i+1).toString().padStart(2,"0")+" "+(seen?sp.n:"?????")+(caught?" ●":""),x,y);
+    });
+  } else if(t.kind==="badges"){
+    drawPanel(80,60,cv.width-160,300);
+    ctx.fillStyle="#2a2440"; ctx.font="bold 20px 'Trebuchet MS'";
+    ctx.fillText("BADGES",104,96);
+    GYMS.forEach((g,i)=>{
+      const x=120+(i%4)*130, y=150+Math.floor(i/4)*100;
+      ctx.beginPath(); ctx.arc(x,y,26,0,7);
+      ctx.fillStyle=G.badges[i]?TYPE_COLOR[g.type]:"#d8d0c0"; ctx.fill();
+      ctx.strokeStyle="#4a4088"; ctx.lineWidth=3; ctx.stroke();
+      ctx.fillStyle="#2a2440"; ctx.font="12px 'Trebuchet MS'"; ctx.textAlign="center";
+      ctx.fillText(G.badges[i]?g.badge:"???",x,y+46); ctx.textAlign="left";
+    });
+  } else if(t.kind==="mart"){
+    const stock=t.stock;
+    drawPanel(cv.width/2-190,40,380,stock.length*34+112);
+    ctx.fillStyle="#2a2440"; ctx.font="bold 19px 'Trebuchet MS'";
+    ctx.fillText("POKÉ MART — ₹"+G.money,cv.width/2-166,72);
+    ctx.font="bold 17px 'Trebuchet MS'";
+    stock.forEach(([n2,pr],i)=>{
+      ctx.fillStyle=i===t.idx?"#c05838":"#2a2440";
+      ctx.fillText((i===t.idx?"▶ ":"  ")+n2,cv.width/2-166,104+i*34);
+      ctx.textAlign="right"; ctx.fillText("₹"+pr,cv.width/2+150,104+i*34); ctx.textAlign="left";
+    });
+    ctx.fillStyle=t.idx===stock.length?"#c05838":"#2a2440";
+    ctx.fillText((t.idx===stock.length?"▶ ":"  ")+"LEAVE",cv.width/2-166,104+stock.length*34);
+  }
+}
+//////////////////// RENDERING — BATTLE ////////////////////
+function drawHPBox(mon,x,y,showHP,showXP){
+  drawPanel(x,y,264,showHP?86:66);
+  ctx.fillStyle="#2a2440"; ctx.font="bold 17px 'Trebuchet MS'"; ctx.textAlign="left";
+  ctx.fillText(DEX[mon.id].n,x+16,y+26);
+  ctx.textAlign="right"; ctx.fillText("Lv"+mon.lvl,x+248,y+26); ctx.textAlign="left";
+  if(mon.status){ ctx.fillStyle={par:"#c8a030",brn:"#d86838",psn:"#9a4a9a",slp:"#8a82a0",frz:"#5ab8d8"}[mon.status];
+    rr2(x+16,y+32,42,16,6); ctx.fill(); ctx.fillStyle="#fff"; ctx.font="bold 11px 'Trebuchet MS'";
+    ctx.fillText(mon.status.toUpperCase(),x+22,y+44); }
+  const bw=170;
+  ctx.fillStyle="#c8c0a8"; rr2(x+70,y+36,bw,10,5); ctx.fill();
+  const r=Math.max(0,mon.hp/mon.maxhp);
+  ctx.fillStyle=r>0.5?"#48b048":r>0.2?"#e8b830":"#d84838";
+  if(r>0){ rr2(x+70,y+36,bw*r,10,5); ctx.fill(); }
+  if(showHP){ ctx.fillStyle="#2a2440"; ctx.font="bold 15px 'Trebuchet MS'"; ctx.textAlign="right";
+    ctx.fillText(mon.hp+" / "+mon.maxhp,x+240,y+66); ctx.textAlign="left"; }
+  if(showXP){
+    const prev=xpForLevel(mon.lvl), next=xpForLevel(mon.lvl+1);
+    const xr=Math.max(0,Math.min(1,(mon.xp-prev)/(next-prev)));
+    ctx.fillStyle="#c8c0a8"; rr2(x+16,y+74,232,6,3); ctx.fill();
+    ctx.fillStyle="#4898e8"; if(xr>0){ rr2(x+16,y+74,232*xr,6,3); ctx.fill(); }
+  }
+}
+function drawBattle(){
+  const B=BTL; if(!B) return;
+  const p=PAL[curMap().pal];
+  const grd=ctx.createLinearGradient(0,0,0,cv.height);
+  grd.addColorStop(0,p.gr); grd.addColorStop(1,p.path);
+  ctx.fillStyle=grd; ctx.fillRect(0,0,cv.width,cv.height);
+  ctx.fillStyle="rgba(255,255,255,.25)";
+  ctx.beginPath(); ctx.ellipse(cv.width-190,196,120,34,0,0,7); ctx.fill();
+  ctx.beginPath(); ctx.ellipse(190,352,130,38,0,0,7); ctx.fill();
+  // mons
+  const foeShake=B.shakeFoe>0?Math.sin(B.shakeFoe*2)*6:0;
+  const meShake=B.shakeMe>0?Math.sin(B.shakeMe*2)*6:0;
+  if(B.foe.hp>0||B.wait&&B.wait.t==="text"){
+    if(!(B.caught)) drawMon(ctx,DEX[B.foe.id],cv.width-190+foeShake,206,110,false,tick);
+  }
+  if(B.ballAnim){ ctx.fillStyle="#d84838"; ctx.beginPath(); ctx.arc(cv.width-190,180,14,Math.PI,0); ctx.fill();
+    ctx.fillStyle="#f0ece0"; ctx.beginPath(); ctx.arc(cv.width-190,180,14,0,Math.PI); ctx.fill();
+    ctx.strokeStyle="#2a2440"; ctx.lineWidth=3; ctx.beginPath(); ctx.arc(cv.width-190,180,14,0,7); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(cv.width-204,180); ctx.lineTo(cv.width-176,180); ctx.stroke(); }
+  const my=me();
+  if(my.hp>0||true) drawMon(ctx,DEX[my.id],190+meShake,368,130,true,tick);
+  // boxes
+  drawHPBox(B.foe,26,22,false,false);
+  drawHPBox(my,cv.width-292,208,true,true);
+  // text / menus
+  const w=B.wait;
+  if(!w) return;
+  if(w.t==="text"){
+    const s=w.s, shown=s.slice(0,B.textChars|0);
+    drawTextBox(shown,B.textChars>=s.length);
+  } else if(w.t==="cmd"){
+    const m2=B.menu||{kind:"main",idx:0};
+    if(m2.kind==="main"){
+      drawTextBox("What will "+DEX[my.id].n+" do?");
+      drawPanel(cv.width-292,cv.height-118,280,106);
+      const opts=["FIGHT","BAG","POKÉMON","RUN"];
+      opts.forEach((o,i)=>{
+        const ox=cv.width-268+(i%2)*140, oy=cv.height-118+40+Math.floor(i/2)*40;
+        ctx.fillStyle=i===m2.idx?"#c05838":"#2a2440"; ctx.font="bold 18px 'Trebuchet MS'";
+        ctx.fillText((i===m2.idx?"▶":" ")+o,ox,oy);
+      });
+    } else if(m2.kind==="fight"){
+      drawPanel(12,cv.height-118,cv.width-24,106);
+      my.moves.forEach((mv,i)=>{
+        const d=MOVES[mv];
+        const ox=34+(i%2)*330, oy=cv.height-118+40+Math.floor(i/2)*40;
+        ctx.fillStyle=TYPE_COLOR[d.t]; rr2(ox+22,oy-14,10,16,4); ctx.fill();
+        ctx.fillStyle=i===m2.fIdx?"#c05838":"#2a2440"; ctx.font="bold 18px 'Trebuchet MS'";
+        ctx.fillText((i===m2.fIdx?"▶":" ")+" "+mv+(d.pow?" ("+d.pow+")":""),ox+38,oy);
+      });
+    } else if(m2.kind==="bag"){
+      const items=Object.keys(G.bag).filter(k=>G.bag[k]>0);
+      drawPanel(cv.width-320,60,300,Math.max(1,items.length)*32+56);
+      ctx.fillStyle="#2a2440"; ctx.font="bold 18px 'Trebuchet MS'";
+      ctx.fillText("BAG",cv.width-296,90);
+      if(!items.length) ctx.fillText("Empty!",cv.width-296,122);
+      items.forEach((it,i)=>{
+        ctx.fillStyle=i===m2.bIdx?"#c05838":"#2a2440"; ctx.font="bold 16px 'Trebuchet MS'";
+        ctx.fillText((i===m2.bIdx?"▶ ":"  ")+it+" ×"+G.bag[it],cv.width-296,120+i*32);
+      });
+    } else if(m2.kind==="party"){
+      drawBattlePartyList(m2.pIdx,m2.useItem?("Use "+m2.useItem+" on?"):"Switch to?");
+    }
+  } else if(w.t==="pickmon"){
+    drawBattlePartyList(B.fpIdx===undefined?0:B.fpIdx,"Send out who?");
+  } else if(w.t==="yesno"){
+    drawTextBox(w.q,false);
+    drawPanel(cv.width-190,cv.height-220,176,96);
+    ["YES","NO"].forEach((o,i)=>{
+      ctx.fillStyle=i===(B.ynIdx||0)?"#c05838":"#2a2440"; ctx.font="bold 18px 'Trebuchet MS'";
+      ctx.fillText((i===(B.ynIdx||0)?"▶ ":"  ")+o,cv.width-166,cv.height-184+i*36);
+    });
+  } else if(w.t==="pickmove"){
+    drawTextBox("Forget which move for "+w.newMove+"?",false);
+    drawPanel(cv.width-320,60,300,w.mon.moves.length*32+50);
+    w.mon.moves.forEach((mv,i)=>{
+      ctx.fillStyle=i===(B.pmIdx||0)?"#c05838":"#2a2440"; ctx.font="bold 16px 'Trebuchet MS'";
+      ctx.fillText((i===(B.pmIdx||0)?"▶ ":"  ")+mv,cv.width-296,92+i*32);
+    });
+  }
+}
+function drawBattlePartyList(sel,title){
+  drawPanel(60,40,cv.width-120,G.party.length*54+70);
+  ctx.fillStyle="#2a2440"; ctx.font="bold 19px 'Trebuchet MS'";
+  ctx.fillText(title,84,72);
+  G.party.forEach((mon,i)=>{
+    const y=104+i*54;
+    if(i===sel){ ctx.fillStyle="rgba(192,88,56,.15)"; rr2(74,y-26,cv.width-148,48,8); ctx.fill(); }
+    drawMon(ctx,DEX[mon.id],106,y+16,36,false,tick);
+    ctx.fillStyle=mon.hp<=0?"#a8a098":(i===sel?"#c05838":"#2a2440");
+    ctx.font="bold 17px 'Trebuchet MS'";
+    ctx.fillText(DEX[mon.id].n+" Lv"+mon.lvl+"  "+mon.hp+"/"+mon.maxhp+(mon.hp<=0?" (FNT)":""),134,y+4);
+  });
+}
+//////////////////// TITLE / INTRO ////////////////////
+function drawTitle(){
+  const grd=ctx.createLinearGradient(0,0,0,cv.height);
+  grd.addColorStop(0,"#f8b048"); grd.addColorStop(0.55,"#e87038"); grd.addColorStop(1,"#7a2848");
+  ctx.fillStyle=grd; ctx.fillRect(0,0,cv.width,cv.height);
+  // sun
+  ctx.fillStyle="rgba(255,240,200,.9)"; ctx.beginPath(); ctx.arc(cv.width/2,206,74,0,7); ctx.fill();
+  // silhouetted temple skyline
+  ctx.fillStyle="#3a1830";
+  ctx.fillRect(0,300,cv.width,180);
+  for(let i=0;i<7;i++){
+    const bx=40+i*100, bh=40+((i*37)%60);
+    ctx.fillRect(bx,300-bh,44,bh);
+    ctx.beginPath(); ctx.moveTo(bx-4,300-bh); ctx.lineTo(bx+22,300-bh-34); ctx.lineTo(bx+48,300-bh); ctx.fill();
+  }
+  // legendary silhouette
+  ctx.save(); ctx.globalAlpha=0.32; drawMon(ctx,DEX[68],cv.width/2,240,180,false,tick); ctx.restore();
+  ctx.textAlign="center";
+  ctx.font="900 58px 'Trebuchet MS'"; ctx.lineJoin="round";
+  ctx.strokeStyle="#3a1830"; ctx.lineWidth=12; ctx.strokeText("POKÉMON",cv.width/2,120);
+  ctx.fillStyle="#f8e050"; ctx.fillText("POKÉMON",cv.width/2,120);
+  ctx.font="900 44px 'Trebuchet MS'";
+  ctx.strokeText("BHARATVA",cv.width/2,168);
+  ctx.fillStyle="#fff"; ctx.fillText("BHARATVA",cv.width/2,168);
+  ctx.font="bold 18px 'Trebuchet MS'";
+  const opts=hasSave()?["CONTINUE","NEW GAME"]:["NEW GAME"];
+  opts.forEach((o,i)=>{
+    ctx.fillStyle=i===titleSel?"#f8e050":"rgba(255,255,255,.85)";
+    ctx.fillText((i===titleSel?"▶ ":"")+o,cv.width/2,368+i*36);
+  });
+  ctx.font="13px 'Trebuchet MS'"; ctx.fillStyle="rgba(255,255,255,.6)";
+  ctx.fillText("A fan-made GBA-style region · 71 new Pokémon · 8 gyms · Elite Four",cv.width/2,452);
+  ctx.textAlign="left";
+}
+let titleSel=0;
+function updateTitle(){
+  const opts=hasSave()?2:1;
+  if(tapped("arrowdown")||tapped("arrowup")){ titleSel=(titleSel+1)%opts; sfx.sel(); }
+  if(tapA()){
+    audio(); sfx.ok();
+    if(hasSave()&&titleSel===0){
+      loadGame(); G.scene="world"; MUSIC.play(curMap().music||"town");
+    } else {
+      // fresh state
+      G.party=[]; G.box=[]; G.bag={"Poké Ball":5,"Potion":2}; G.money=3000;
+      G.badges=[false,false,false,false,false,false,false,false]; G.flags={}; G.beaten={};
+      G.map="nariyalpur"; G.px=10; G.py=6; G.dir=0; G.lastHeal={map:"nariyalpur",x:7,y:7};
+      G.dexSeen=new Set(); G.dexCaught=new Set();
+      G.scene="world"; MUSIC.play("town");
+      say(["Welcome to BHARATVA — a region of eleven languages, a hundred festivals and a million Pokémon.",
+           "You are a young trainer from Nariyalpur, the coconut village at the region's southern tip.",
+           "Prof. Neem's lab is the building with the dark door. She's expecting you!",
+           "(Z = talk/confirm · X = cancel · ENTER = menu · walk into red-roof Centers to heal, blue-roof Marts to shop)"]);
+    }
+  }
+}
+function drawStarterScreen(){
+  const grd=ctx.createLinearGradient(0,0,0,cv.height);
+  grd.addColorStop(0,"#e8e4d8"); grd.addColorStop(1,"#c8b898");
+  ctx.fillStyle=grd; ctx.fillRect(0,0,cv.width,cv.height);
+  ctx.fillStyle="#2a2440"; ctx.font="bold 26px 'Trebuchet MS'"; ctx.textAlign="center";
+  ctx.fillText("Choose your partner!",cv.width/2,60);
+  STARTERS.forEach((id,i)=>{
+    const x=cv.width/2+(i-1)*210, y=250;
+    if(i===starterSel){ ctx.fillStyle="rgba(192,88,56,.14)"; rr2(x-92,90,184,270,16); ctx.fill();
+      ctx.strokeStyle="#c05838"; ctx.lineWidth=4; rr2(x-92,90,184,270,16); ctx.stroke(); }
+    drawMon(ctx,DEX[id],x,y,i===starterSel?120:96,false,tick);
+    ctx.fillStyle="#2a2440"; ctx.font="bold 20px 'Trebuchet MS'";
+    ctx.fillText(DEX[id].n,x,300);
+    const ty=DEX[id].t[0];
+    ctx.fillStyle=TYPE_COLOR[ty]; rr2(x-42,312,84,24,12); ctx.fill();
+    ctx.fillStyle="#fff"; ctx.font="bold 13px 'Trebuchet MS'"; ctx.fillText(ty.toUpperCase(),x,329);
+  });
+  ctx.fillStyle="#68607a"; ctx.font="15px 'Trebuchet MS'";
+  ctx.fillText("←/→ choose · Z confirm",cv.width/2,420);
+  ctx.textAlign="left";
+  if(DLG.active){ const page=DLG.pages[DLG.idx]||""; drawTextBox(page.slice(0,DLG.chars),DLG.chars>=page.length); }
+}
+//////////////////// MAIN LOOP ////////////////////
+function update(){
+  if(G.scene==="title") updateTitle();
+  else if(G.scene==="starter") updateStarter();
+  else if(G.scene==="world"){
+    updateFade();
+    if(MENU.open) updateMenu();
+    else updateWorld();
+  }
+  else if(G.scene==="battle"){ updateBattle(); }
+}
+function render(){
+  if(G.scene==="title"){ drawTitle(); return; }
+  if(G.scene==="starter"){ drawStarterScreen(); return; }
+  if(G.scene==="battle"){ drawBattle(); return; }
+  drawWorld();
+  drawMenus();
+  if(DLG.active&&!MENU.open){
+    const page=DLG.pages[DLG.idx]||"";
+    drawTextBox(page.slice(0,DLG.chars),DLG.chars>=page.length);
+    if(DLG.choice&&DLG.chars>=page.length&&DLG.idx===DLG.pages.length-1){
+      drawPanel(cv.width-250,cv.height-128-DLG.choice.length*36,236,DLG.choice.length*36+24);
+      DLG.choice.forEach((o,i)=>{
+        ctx.fillStyle=i===DLG.choiceIdx?"#c05838":"#2a2440"; ctx.font="bold 17px 'Trebuchet MS'";
+        ctx.fillText((i===DLG.choiceIdx?"▶ ":"  ")+o,cv.width-230,cv.height-100-DLG.choice.length*36+i*36+ (36-8));
+      });
+    }
+  } else if(DLG.active&&MENU.open){
+    const page=DLG.pages[DLG.idx]||"";
+    drawTextBox(page.slice(0,DLG.chars),DLG.chars>=page.length);
+    if(DLG.choice&&DLG.chars>=page.length){
+      drawPanel(cv.width-250,cv.height-128-DLG.choice.length*36,236,DLG.choice.length*36+24);
+      DLG.choice.forEach((o,i)=>{
+        ctx.fillStyle=i===DLG.choiceIdx?"#c05838":"#2a2440"; ctx.font="bold 17px 'Trebuchet MS'";
+        ctx.fillText((i===DLG.choiceIdx?"▶ ":"  ")+o,cv.width-230,cv.height-100-DLG.choice.length*36+i*36+28);
+      });
+    }
+  }
+  if(fade.dir!==0||fade.t>0){ ctx.fillStyle="rgba(8,6,16,"+fade.t+")"; ctx.fillRect(0,0,cv.width,cv.height); }
+}
+// hook trainer-battle completion for story flags
+const _origStartTrainer=startTrainerBattle;
+startTrainerBattle=function(tr,tid,doneCb,music){
+  _origStartTrainer(tr,tid,(res)=>{
+    if(doneCb)doneCb(res);
+    if(res==="win"&&tid) afterBattleHooks(tid);
+  },music);
+};
+let last=0,acc=0;
+function loop(t){
+  requestAnimationFrame(loop);
+  const dt=Math.min(60,t-last); last=t; acc+=dt;
+  while(acc>=16.67){ acc-=16.67; tick++; update(); clearTaps(); }
+  render();
+}
+requestAnimationFrame(loop);
+</script>
